@@ -1,0 +1,139 @@
+:root {
+  --theme-color: #4169e1;
+  --base-font-size: 16px;
+  --sidebar-width: 286px;
+  --content-max-width: 920px;
+}
+
+body {
+  background: #fff;
+  color: #263247;
+}
+
+.app-name-link {
+  color: #1f2f50 !important;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+}
+
+.sidebar {
+  border-right: 1px solid #e8edf5;
+  background: #f8faff;
+}
+
+.sidebar-nav > ul > li > p {
+  margin: 1.5rem 0 0.35rem;
+  color: #8290a8;
+  font-size: 0.76rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar-nav li a {
+  color: #4d5b73;
+  line-height: 1.55;
+}
+
+.sidebar-nav li a:hover,
+.sidebar-nav li.active > a {
+  color: #3158c9;
+}
+
+.markdown-section {
+  color: #334155;
+  line-height: 1.85;
+}
+
+.markdown-section h1,
+.markdown-section h2,
+.markdown-section h3,
+.markdown-section h4 {
+  color: #17243b;
+  font-weight: 720;
+  letter-spacing: -0.025em;
+}
+
+.markdown-section h1 {
+  margin-bottom: 1.6rem;
+  font-size: 2.15rem;
+}
+
+.markdown-section h2 {
+  margin-top: 3rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid #e8edf5;
+  font-size: 1.55rem;
+}
+
+.markdown-section blockquote {
+  border-left-color: #7894ee;
+  background: #f5f8ff;
+  color: #52627c;
+}
+
+.markdown-section table {
+  display: table;
+  width: 100%;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: separate;
+  border: 1px solid #e3e9f2;
+  border-radius: 10px;
+}
+
+.markdown-section th {
+  background: #f4f7fc;
+  color: #253653;
+}
+
+.markdown-section th,
+.markdown-section td {
+  border-right: 1px solid #e8edf5;
+  border-bottom: 1px solid #e8edf5;
+}
+
+.markdown-section tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-section tr th:last-child,
+.markdown-section tr td:last-child {
+  border-right: 0;
+}
+
+.markdown-section pre {
+  border: 1px solid #e6ebf3;
+  border-radius: 10px;
+  background: #f7f9fc;
+}
+
+.markdown-section code {
+  color: #9b3e62;
+}
+
+.markdown-section pre > code {
+  color: #34435b;
+}
+
+.search input {
+  border-radius: 8px;
+}
+
+.pagination-item a {
+  color: #3158c9;
+}
+
+@media (max-width: 768px) {
+  :root {
+    --sidebar-width: 290px;
+  }
+
+  .markdown-section {
+    padding: 1.5rem 1.25rem 3rem;
+  }
+
+  .markdown-section h1 {
+    font-size: 1.8rem;
+  }
+}
