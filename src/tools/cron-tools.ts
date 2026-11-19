@@ -20,7 +20,7 @@ export function createCronTool(cronService: CronService): ToolDefinition {
     },
     isConcurrencySafe: false,
     isReadOnly: false,
-    execute: async (input: { action: string; id?: string; name?: string; schedule?: string; prompt?: string }) => {
+    execute: async (input: { action: string; id?: string; name?: string; schedule?: string; prompt?: string; handler?: string }) => {
       switch (input.action) {
         case 'list': {
           const jobs = cronService.list();

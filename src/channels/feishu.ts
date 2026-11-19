@@ -72,7 +72,7 @@ export class FeishuChannel implements ChannelDefinition {
     this.wsClient = new lark.WSClient({
       appId: this.config.appId,
       appSecret: this.config.appSecret,
-      loggerLevel: lark.LoggerLevel.WARN,
+      loggerLevel: lark.LoggerLevel.warn,
     });
 
     await this.wsClient.start({ eventDispatcher: dispatcher });

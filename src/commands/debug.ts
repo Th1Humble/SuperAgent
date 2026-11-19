@@ -1,5 +1,6 @@
 import { setCacheEnabled } from '../mock-model.js';
 import { estimateMessageTokens, applyDefense } from '../context/defense.js';
+import { textToolResultOutput } from '../context/tool-result-output.js';
 import type { CommandHandler } from './index.js';
 
 export const debugCommands: CommandHandler[] = [
@@ -15,7 +16,7 @@ export const debugCommands: CommandHandler[] = [
       ctx.messages.push({ role: 'assistant', content: [{ type: 'tool-call' as const, toolCallId: `sim-${i}`, toolName: 'read_file', input: { path: `file-${i}.ts` } }] });
       ctx.timestamps.set(idx + 1, now - age);
       const bigContent = `// file-${i}.ts\n` + 'export function handler() {\n  // ...\n}\n'.repeat(200);
-      ctx.messages.push({ role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: `sim-${i}`, toolName: 'read_file', output: bigContent }] });
+      ctx.messages.push({ role: 'tool', content: [{ type: 'tool-result' as const, toolCallId: `sim-${i}`, toolName: 'read_file', output: textToolResultOutput(bigContent) }] });
       ctx.timestamps.set(idx + 2, now - age);
       ctx.messages.push({ role: 'assistant', content: [{ type: 'text' as const, text: `文件 file-${i}.ts 的内容已读取。` }] });
       ctx.timestamps.set(idx + 3, now - age);
