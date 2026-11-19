@@ -35,6 +35,22 @@ body {
   line-height: 1.55;
 }
 
+.sidebar-nav .app-sub-sidebar li {
+  display: flex;
+  align-items: baseline;
+}
+
+/* The Vue theme floats these dashes; make them a stable flex column instead. */
+.sidebar-nav .app-sub-sidebar li::before {
+  float: none;
+  flex: 0 0 auto;
+}
+
+.sidebar-nav .app-sub-sidebar li > a {
+  flex: 1;
+  min-width: 0;
+}
+
 .sidebar-nav li a:hover,
 .sidebar-nav li.active > a {
   color: #3158c9;

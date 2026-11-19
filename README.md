@@ -1,18 +1,10 @@
 # SuperAgent
 
-> 📚 **[在线阅读：SuperAgent 完整源码学习手册](https://th1humble.github.io/SuperAgent/learning/)** · [源码版目录](docs/learning/README.md)
-
-本地预览静态阅读页：
-
-```bash
-python3 -m http.server 8000
-```
-
-然后打开 [http://localhost:8000/docs/learning/](http://localhost:8000/docs/learning/)。
-
 一个用 TypeScript 写的本地 AI Agent。你在终端里跟它聊天，它可以读写文件、搜项目文档、跑 Shell 命令，也能把活儿分给子 Agent。
 
 不想先去申请 API Key？没关系。项目自带 Mock 模型和 Mock 向量服务，装完就能跑一遍完整流程，之后再接真实模型也不迟。
+
+想沿着课程路线理解这些模块如何组成一个 Agent，可以阅读[完整源码学习手册](https://th1humble.github.io/SuperAgent/learning/)；也可以直接看[仓库中的 Markdown 版](docs/learning/README.md)。
 
 ## 先跑起来
 
@@ -90,9 +82,15 @@ pnpm run init
 
 ## 开发相关
 
-### 完整源码学习手册
+### 本地预览学习手册
 
-如果你希望沿着课程的演进路线系统理解最终仓库，可以从 [SuperAgent 完整源码学习手册](docs/learning/README.md) 开始。手册覆盖 Agent Loop、工具系统、上下文工程、Memory/RAG、扩展机制、安全、Cron、Multi-Agent、可观测性，并提供逐步实践和全源码索引。
+学习手册也可以在本地预览。先在仓库根目录启动静态文件服务：
+
+```bash
+python3 -m http.server 8000
+```
+
+然后打开 [http://localhost:8000/docs/learning/](http://localhost:8000/docs/learning/)。
 
 ```bash
 pnpm exec tsx --test src/context/defense.spec.ts   # 跑现有的测试
