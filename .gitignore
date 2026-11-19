@@ -1,3 +1,11 @@
 node_modules
 dist
 /.env
+/super-agent.config.json
+
+# 运行时产生的数据：会话、轨迹、用量、定时任务、长期记忆
+/.sessions/
+/.traces/
+/.usage/
+/.cron/
+/.memory/

@@ -52,10 +52,12 @@ export async function spawnAgent(
   const ac = new AbortController();
   console.log(`  ${tag} 启动: ${request.task.slice(0, 50)}`);
 
+  // messages 必须在 try 外声明：catch 里要用它取部分结果
+  const messages: ModelMessage[] = [
+    { role: 'user', content: request.task },
+  ];
+
   try {
-    const messages: ModelMessage[] = [
-      { role: 'user', content: request.task },
-    ];
     const system = ctx.buildSystem() +
       '\n\n[子 Agent 模式] 你是一个被派出去执行具体任务的子 Agent。直接完成任务并输出结论，保持简洁。' +
       '\n当你需要同时获取多个独立信息时（比如读多个文件、搜多个关键词），尽可能在一次回复中并行调用多个工具，不要一个个串行调。';
