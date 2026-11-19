@@ -80,6 +80,10 @@ pnpm run init
 
 ## 开发相关
 
+### 完整源码学习手册
+
+如果你希望沿着课程的演进路线系统理解最终仓库，可以从 [SuperAgent 完整源码学习手册](docs/learning/README.md) 开始。手册覆盖 Agent Loop、工具系统、上下文工程、Memory/RAG、扩展机制、安全、Cron、Multi-Agent、可观测性，并提供逐步实践和全源码索引。
+
 ```bash
 pnpm exec tsx --test src/context/defense.spec.ts   # 跑现有的测试
 pnpm exec tsc --noEmit                             # 类型检查
