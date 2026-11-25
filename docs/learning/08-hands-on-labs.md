@@ -1,385 +1,492 @@
-# 08. 实践教程：把“看懂”变成“做过”
+# 08. 18 组实践实验：从“看懂”到“做过”
 
-本章按风险和复杂度递增。实验默认使用 Mock 模式，不要求 API Key。涉及源码修改的练习建议先创建自己的 Git 分支；每次只改一个变量，观察现象后再还原或提交。
+这一章把前面 7 章的内容拆成 18 个小实验，难度从“敲命令看日志”一路递进到“改源码接新能力”。
 
-## 实验 0：建立基线
+动手前先做两件小准备：
+1. 建议先开一个自己的 Git 分支（比如 `git checkout -b learn/labs`），改乱了随时能 `git checkout -- .` 还原；
+2. **分清哪些实验 Mock 模式就能跑、哪些必须接真实模型**：
+   - **实验 0 ～ 实验 14**：基本都能在**无 API Key 的 Mock 模式**下跑通（文中标好了对应的 Mock 触发口令）；
+   - **实验 15 ～ 实验 17**：涉及多步自主规划、`cron_manage` 和 `spawn_agent`，因为 `src/mock-model.ts` 没写这两类工具的触发规则，**建议接上真实 `DASHSCOPE_API_KEY` 再做**（或按实验里的提示用代码直接调对应模块验证）。
+
+---
+
+## 实验 0：建立基线（Mock 模式）
 
 ### 目标
-
-确认项目、Dashboard、RAG 和基本命令能够启动。
+确认终端、Dashboard 网页、RAG 自动导入和基础斜杠命令都能正常跑起来。
 
 ### 操作
-
 ```bash
 pnpm install
 pnpm start
 ```
 
-看到 `You:` 后输入：
+正常启动后，终端大概率会打印出类似下面这段内容（如果报 3000 端口被占，先在 `.env` 配 `FEISHU_PORT=3001`）：
+
+```text
+  未找到 super-agent.config.json，使用默认配置
+  运行 pnpm run init 生成配置文件
+
+  已注册 3 个 Mock MCP 工具
+  加载插件...
+  [plugin:supabase] 未配置 SUPABASE_URL/SUPABASE_KEY，使用 Mock 数据模式
+  ✓ supabase — 3 个工具
+  启动 Channel...
+  [feishu] 未配置 FEISHU_APP_ID / FEISHU_APP_SECRET，跳过飞书 Bot（仅启动 Dashboard）
+  [feishu] Dashboard 已启动: http://localhost:3000
+  [gateway] ✓ feishu 已启动
+Super Agent v1.0 (type "exit" to quit)
+...
+  发现 2 个文档，自动导入知识库...
+  知识库就绪，共 xx 个片段
+```
+
+看到 `You:` 后依次输入：
 
 ```text
 你好
 /rag
 /context
 /role
-exit
 ```
 
-浏览器打开 `http://localhost:3000`，从 Dashboard 发送“你好”。
+再去浏览器打开 `http://localhost:3000`，从页面里发一条 `你好`，最后回到终端敲 `exit` 退出。
 
-### 观察
+### 验收标准
+你能说清楚：为什么从 Dashboard 网页发消息，终端里照样会打印 `--- Step 1 ---`，但 `.sessions/default.jsonl` 和 `.traces/` 里却找不到网页那条对话？
 
-- 没有 `super-agent.config.json` 时提示使用默认配置；
-- 没有 API Key 时模型 ID 是 Mock；
-- MCP 显示注册 Mock GitHub 工具；
-- Supabase 显示 Mock 模式；
-- `docs/` 第一层 Markdown 被导入；
-- Dashboard 回复也会触发终端中的 Step 输出。
+---
 
-### 验收
-
-你能说明为什么 Dashboard 可以使用和 CLI 相同的工具，却没有写入同一个 Session Trace。
-
-## 实验 1：追踪一次不调用工具的请求
+## 实验 1：追踪一次不调工具的请求（Mock 模式）
 
 ### 操作
-
 输入：
 
 ```text
-用一句话介绍你自己
+你好
 ```
 
-记录：Step 数量、是否有 `[调用]`、最终 Trace 路径。然后运行：
+记下终端末尾打印的 `[Trace] .traces/default-xxx.jsonl` 路径，在另一个终端里跑：
 
 ```bash
-pnpm run trace:inspect .traces/<trace-file>.jsonl
+pnpm run trace:inspect .traces/把这里换成真实文件名.jsonl
 ```
 
-### 观察
+### 预期输出示例
+`trace:inspect` 会打出一份摘要（格式来自 `src/trace/recorder.ts`）：
 
-无工具调用时，模型输出文本后 `hasToolCall=false`，Agent Loop 在第一个 Step 结束。
+```text
+Trace default-2026-...
+  Step 1: context 1 messages
+    completed in 612ms · 845 tokens
+  Status: completed
+```
 
-### 深入
-
-直接打开 Trace JSONL，找到：
-
-- `trace_started.model`
-- `step_started.context.system`
-- `step_completed.usage`
+### 再往下深挖一步
+直接用编辑器打开那个 `.traces/*.jsonl` 文件，对照找这 4 个字段：
+- `trace_started.model`（确认是 `mock-model` 还是真实模型）
+- `step_started.context.system`（这里躺着拼完的完整 System Prompt）
+- `step_completed.usage`（这一步的输入/输出/缓存 Token）
 - `trace_finished.status`
 
-## 实验 2：追踪一次工具调用
+---
+
+## 实验 2：追踪一次工具调用（Mock 模式）
 
 ### 操作
+输入：
 
 ```text
-读取 package.json，告诉我 name、依赖数量和启动脚本
+读取 package.json，告诉我项目名
 ```
 
-### 预期
+### 预期现象
+注意看终端分成两轮：
+- `--- Step 1 ---`：打印 `[调用: read_file({"path":"package.json"})]` → `[结果: read_file] ...` → `→ 继续下一步...`；
+- `--- Step 2 ---`：模型拿到文件内容后输出文本（Mock 模式下它会回 `工具返回了以下信息：...`），然后本轮结束。
 
-通常至少两个 Step：第一步调用 `read_file`，第二步观察结果并回答。
+### 思考检查
+如果这一步里模型在调用工具前吐了一段文字，日志展示用的是 `fullText`，但 `agentLoop()` 塞回历史数组的为什么必须是 `(await result.response).messages`？
 
-### 思考
+---
 
-如果模型在工具调用前输出了一段文字，`fullText` 会收集它；但最终消息历史必须使用 `result.response.messages`，因为其中还含结构化工具部件。
-
-## 实验 3：观察并行与独占
+## 实验 3：观察并发安全工具与独占工具（Mock 模式）
 
 ### 操作
+不要自己瞎编长句子，用 Mock 模型内置的并发触发词和写文件触发词：
 
 ```text
-同时查询北京天气，并计算 (18 + 24) * 3
+测试并发
+测试写文件
 ```
 
-然后尝试一个包含读文件和写文件意图的任务，但不要让它修改重要文件，可以要求写入一个专用临时练习文件。
+（`测试写文件` 会在项目根目录生成一个 `test-output.txt`，实验做完记得删掉。）
 
-### 观察
+### 观察重点
+- 输入 `测试并发` 时，Mock 一次吐出 3 个调用（两次 `get_weather` + 一次 `list_directory`），这三者都标了 `isConcurrencySafe: true`，可以同时进 `acquireConcurrent()`；
+- 输入 `测试写文件` 时，`write_file` 是独占工具，而且会顺便触发 Pre Hook `audit-log` 打印 `[audit] 文件写入操作`。
 
-- 天气和计算器标记为并发安全；
-- 写文件是独占工具；
-- Registry 负责锁，而不是 Agent Loop 自己判断。
+### 自己改一行代码验证
+去 `src/tools/utility-tools.ts` 暂时把 `weatherTool` 的 `isConcurrencySafe` 改成 `false`，重启后再敲 `测试并发`，用 `console.log` 或时间观察它是不是变成串行排队了，理解后改回 `true`。
 
-### 延伸修改
+---
 
-暂时把一个只读工具的 `isConcurrencySafe` 改为 `false`，重复同样任务，比较执行顺序。理解后恢复。
-
-## 实验 4：增加第一个工具
+## 实验 4：亲手增加第一个工具
 
 ### 目标
+写一个只读工具 `project_summary`，统计指定目录下的顶层子目录列表和文件数量。
 
-增加 `project_summary`，返回文件数和顶层目录列表。
+### 起步代码骨架
+新建 `src/tools/project-tools.ts`：
 
-### 步骤
+```ts
+import fs from 'node:fs';
+import path from 'node:path';
+import type { ToolDefinition } from './registry.js';
 
-1. 新建 `src/tools/project-tools.ts`；
-2. 按 `ToolDefinition` 定义 name、description、parameters 和 execute；
-3. 标记只读和并发安全；
-4. 在 `src/tools/index.ts` 导入并加入 `allTools`；
-5. 启动后观察启动日志和 `/role` 的活动工具数量确认注册；
-6. 用自然语言要求模型总结项目结构。
+export const projectSummaryTool: ToolDefinition = {
+  name: 'project_summary',
+  description: '统计指定目录下的文件总数与顶层子目录，用于快速了解项目结构。',
+  parameters: {
+    type: 'object',
+    properties: {
+      dir: { type: 'string', description: '目标目录，默认当前目录 "."' },
+    },
+    required: ['dir'],
+    additionalProperties: false,
+  },
+  isReadOnly: true,
+  isConcurrencySafe: true,
+  execute: async ({ dir }: { dir: string }) => {
+    if (!fs.existsSync(dir)) return `目录不存在: ${dir}`;
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const dirs = entries.filter(e => e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git').map(e => e.name);
+    const files = entries.filter(e => e.isFile()).map(e => e.name);
+    return { dir, topLevelDirs: dirs, topLevelFileCount: files.length };
+  },
+};
+```
 
-### 设计检查
+然后打开 `src/tools/index.ts`，把 `projectSummaryTool` 导入并放进 `allTools` 数组。
 
-- Schema 是否拒绝多余字段？
-- 输出是否有数量上限？
-- 是否跳过 `node_modules` 和 `.git`？
-- 路径不存在时返回什么？
-- 工具描述有没有说明使用场景？
+### 验证方法（重要！）
+1. 重启 `pnpm start`，输入 `/role`，确认可用工具数量比之前多 1 个；
+2. **如果你用的是 Mock 模式**：因为 `mock-model.ts` 不认识新工具，可以在 `src/mock-model.ts` 的 `detectToolIntent()` 顶部加一条规则测试：
+   ```ts
+   if (text.includes('项目概览') && !hasToolResults(prompt)) {
+     return { toolName: 'project_summary', args: { dir: '.' } };
+   }
+   ```
+   然后输入 `项目概览`；如果你接了真实 API Key，直接用自然语言问 `帮我概览一下当前目录的项目结构` 即可。
 
-## 实验 5：理解 Tool Search
+---
+
+## 实验 5：体验 `tool_search` 延迟发现（Mock 模式）
 
 ### 操作
-
-启动后查看：
+启动后先看一眼初始上下文：
 
 ```text
-/context
 /context
 ```
 
-尝试让模型查询模拟 GitHub issue。观察它是否先调用 `tool_search` 获取 `mcp__github__...` 的完整定义。
-
-### 修改实验
-
-把一个本地只读工具暂时标记为 `shouldDefer: true`，设置 `searchHint`，比较 `/context` 中活动和延迟工具 Token。
-
-### 结论
-
-延迟发现优化的是 Schema 上下文，不是工具执行速度。
-
-## 实验 6：验证角色过滤
-
-### 操作
+接着输入触发 GitHub MCP 延迟工具的口令：
 
 ```text
-/role owner
+查询 vercel/ai 的 issue
+```
+
+跑完后再看一次上下文：
+
+```text
+/context
+```
+
+### 观察重点
+1. Step 1 模型先调用 `tool_search({"query":"mcp__github__list_issues"})`；
+2. Step 2 `mcp__github__list_issues` 已经被放进活动工具列表，模型顺利调用它拿到模拟 issue；
+3. 对比前后两次 `/context` 中 `System tools` 占用的 Token 数量变化——记住：**延迟发现省的是 Schema Token，不是执行速度**。
+
+---
+
+## 实验 6：验证角色权限过滤（Mock 模式）
+
+### 操作
+```text
 /role
 /role guest
-/role
 读取 package.json
-执行 pwd
+测试bash
+/role owner
 ```
 
-### 观察
+### 观察重点
+- 在 `guest` 下，`读取 package.json` 照常成功；
+- 在 `guest` 下输入 `测试bash` 时：因为 `mock-model.ts` 不管当前角色硬吐了 `bash` 调用，而 `ToolRegistry` 里已经把 `bash` 过滤掉了，AI SDK 会报错提示工具不存在（被 `main.ts` 捕获打印 `[Agent] ...`）；如果换真实模型，模型压根看不到 `bash` Schema，会直接礼貌拒绝。
 
-guest 仍可读文件，但 `bash` 不在可见集合。权限是在工具暴露阶段生效，而不只是 System Prompt 中的一句要求。
+---
 
-### 延伸
-
-思考路径级权限应放在哪里：Role 规则、Pre Hook、文件工具内部，还是操作系统沙箱？答案通常是多层共同负责。
-
-## 实验 7：观察 Hook
+## 实验 7：观察 Hook 拦截与修改输出（Mock 模式）
 
 ### 操作
-
 ```text
 /hooks
-用 bash 执行 pwd
+测试bash
+测试写文件
 ```
 
-观察 Bash 输出前的 ISO 时间戳。再让 Agent 向专用练习文件写一行，观察 audit log。
+观察两条内置 Hook 效果：
+- `bash-timestamp`（Post Hook）：`测试bash` 的返回值最前面多了 `[2026-...]` ISO 时间戳；
+- `audit-log`（Pre Hook）：`测试写文件` 执行前终端多了一行 `[audit] 文件写入操作: write_file → test-output.txt`。
 
-### 修改实验
+### 进阶小改（顺便验证我们提到的源码细节）
+去 `src/main.ts` 把 `audit-log` 改成：只要 `write_file` 的路径不是 `tmp/` 开头就返回 `{ action: 'block', reason: '只允许写入 tmp/ 目录' }`。重启后输入 `测试写文件`，看终端是不是返回了 `[Hook 拦截] 只允许写入 tmp/ 目录` 且没有崩溃。
 
-增加一个 Pre Hook：当写入路径不在 `tmp/` 时 block。验证模型收到的是 Hook 拦截结果，而不是进程崩溃。
+---
 
-## 实验 8：研究上下文增长
+## 实验 8：研究上下文膨胀与三层防线（Mock 模式）
 
 ### 操作
-
-连续执行几次文件读取和追问，每次运行：
-
 ```text
+/context
+sim
+/context
+defend
 /context
 /usage
 ```
 
-记录 System、Tools、Messages 的变化。
+### 观察重点
+- `sim` 会往内存里硬塞 20 条带大段代码的模拟历史消息，再看 `/context` 时 `Messages` 占比会明显涨起来；
+- 跑完 `defend` 后，旧工具结果被截断或被 TTL 清理，`Messages` 占比立刻掉下来，而 `System prompt` 和 `System tools` 基本不变。
 
-然后运行调试防线命令：
+---
 
-```text
-defend
-/context
-```
-
-### 观察
-
-工具结果截断和 TTL 会改变 Messages；System 和 Tool Schema 通常保持不变。
-
-### 延伸实现
-
-在不改 Agent Loop 的前提下，写一个命令手动调用 `microcompact()` 并替换 `ctx.messages`。比较机械压缩前后。
-
-## 实验 9：接通历史恢复
+## 实验 9：把断掉的 `--continue` 历史恢复接通（动手改造）
 
 ### 目标
+`src/session/store.ts` 已经写好了 `exists()` 和 `load()`，但 `src/main.ts` 启动时依然把 `messages` 初始化成 `[]`。这个实验把它接通。
 
-理解“写了 Session”与“恢复 Session”之间还缺什么。
+### 改造要点
+打开 `src/main.ts` 第 237 行附近，改成：
 
-### 设计步骤
+```ts
+const store = new SessionStore(config.session.id);
+const shouldContinue = process.argv.includes('--continue');
+let messages: ModelMessage[] = [];
+const timestamps = new Map<number, number>();
 
-1. 在启动时识别 `--continue`；
-2. 创建 `SessionStore` 后调用 `exists()` 和 `load()`；
-3. 将返回值作为初始 `messages`；
-4. 恢复或重建 timestamps；
-5. 输出恢复消息数量；
-6. 避免再次重复追加已加载消息。
-
-### 验收场景
-
-第一次启动告诉 Agent 一个临时名字，退出；用 continue 启动后询问名字。区分“从 Session 恢复”与“从 Memory 找回”。
-
-## 实验 10：RAG 检索拆解
-
-### 操作
-
-准备一个小型 Markdown 文档，包含一个独特错误码和一段同义描述，用：
-
-```text
-ingest <文档路径>
+if (shouldContinue && store.exists()) {
+  messages = store.load();
+  const now = Date.now();
+  messages.forEach((_, idx) => timestamps.set(idx, now));
+  console.log(`  [Session] 已恢复 ${messages.length} 条历史消息`);
+}
 ```
 
-分别用精确错误码和自然语言提问。
+### 验收方法
+启动 `pnpm start`，随便问一句 `读取 package.json`，然后 `exit` 退出；接着运行 `pnpm run continue`，输入 `/context` 或 `status`，确认消息数不是 `0`（注意：`mock-model.ts` 不会真正阅读早期聊天里的名字，要测跨重启记忆效果建议接真实模型，或者观察 `status` 里的消息计数和 `.sessions/default.jsonl` 不重复追加）。
 
-### 观察
+---
 
-- 精确错误码更依赖关键词路径；
-- 同义问题更依赖向量路径；
-- 最终结果中可同时看到 `vectorScore` 和 `keywordScore`；
-- 相似段落过多时 MMR 会增加多样性。
-
-### 参数实验
-
-在 `rag/search.ts` 中分别尝试调整：
-
-- `VECTOR_WEIGHT`
-- `KEYWORD_WEIGHT`
-- `CANDIDATE_MULTIPLIER`
-- `MMR_LAMBDA`
-
-每次只改一个值，用同一组查询比较排名。不要只凭一条查询下结论。
-
-## 实验 11：Memory 生命周期
+## 实验 10：拆解 RAG 混合检索与权重（Mock / 真实模型对照）
 
 ### 操作
-
-要求 Agent 记住一个偏好，然后：
+在项目临时放一个 `test-rag.md`，里面故意写一个怪异错误码（如 `ERR_XY99_TIMEOUT`）和一段意思相近但不用这个词的中文描述。然后在 `pnpm start` 里输入：
 
 ```text
+ingest test-rag.md
+查资料 ERR_XY99_TIMEOUT
+```
+
+### 看清楚 Mock 与真实模型差异
+- 在 **Mock 模式**下，`Mock Embedder` 只是按文本字符做确定性哈希，不懂同义词语义；这时精确错误码主要靠 `keywordScore`（BM25）捞回来；
+- 接了 **真实 DashScope API Key** 后，再问一句不包含错误码、只描述现象的问题，就能看到 `vectorScore` 怎么把同义切片拉上来；
+- 打开 `src/rag/search.ts`，试着轮流修改 `VECTOR_WEIGHT`、`KEYWORD_WEIGHT`、`MMR_LAMBDA`，每次只改一个值对比排名和去重效果（做完记得删掉 `test-rag.md`）。
+
+---
+
+## 实验 11：体验 Memory 持久化与体检（Mock 模式）
+
+### 操作
+```text
+记住：我写代码偏好使用 TypeScript 严格模式
 /memory
-/memory search <关键词>
+/memory search 严格
 /lint
 ```
 
-打开 `.memory/MEMORY.md` 和具体条目，观察 Frontmatter 时间字段。
+### 观察重点
+去 `.memory/` 目录打开刚刚生成的 `.md` 文件和 `MEMORY.md`，看里面的 Frontmatter 时间戳字段 `lastWriteAt` / `lastReadAt`。然后 `exit` 重启 `pnpm start`，再输入 `/memory`，验证它确实跨重启保留了下来。
 
-### 思考
+---
 
-- 读取为何也修改文件？因为更新 `lastReadAt`；
-- 记忆为什么是线索？因为仓库和用户偏好会变化；
-- 什么信息不应写入？密钥、可从代码推导的信息、临时输出。
-
-## 实验 12：写一个 Skill
-
-### 目标
-
-创建 `.skills/architecture-review/SKILL.md`，要求模型按“入口、状态、依赖、失败、边界”五部分分析模块。
+## 实验 12：写一个自己的 Skill（Mock 模式）
 
 ### 操作
+新建 `.skills/architecture-review/SKILL.md`：
 
-启动后：
+```markdown
+---
+name: architecture-review
+description: 按固定五步拆解代码模块
+when_to_use: 当用户要求分析某个目录或模块架构时
+---
+
+分析模块时请严格按下面 5 个小节输出：
+1. 入口在哪
+2. 维护了哪些状态
+3. 依赖了哪些外部模块
+4. 失败了会怎样
+5. 目前的边界和局限
+```
+
+启动 `pnpm start` 后输入：
 
 ```text
 /skill list
+/context
 /skill load architecture-review
-请分析 src/cron 模块
+/context
 /skill unload architecture-review
 ```
 
-比较激活前后的回答结构和 `/context` 中 System Prompt 占用。
+注意前面第 03 章提过的小细节：由于 `src/commands/context.ts` 硬编码了 `skillsChars: 0`，激活后多出来的 Token 会加在 `System prompt` 这一项里。如果接了真实模型，激活前后各问一次 `分析 src/cron 模块`，回答结构会明显不一样。
 
-## 实验 13：写一个 Plugin
+---
 
-### 目标
-
-编写只读的项目元数据插件，注册 `<plugin>__package_info` 工具。
-
-### 要点
-
-- 使用 Plugin API，不直接访问全局 Registry；
-- 在 activate 中注册工具；
-- 配置支持 `${ENV_VAR}`；
-- destroy 中演示资源清理日志；
-- 通过 `/plugin` 查看工具前缀；
-- unload 后确认工具消失。
-
-## 实验 14：实现一个内存 Channel
+## 实验 13：写一个进程内 Plugin（动手改造）
 
 ### 目标
+参照 `src/plugins/supabase-plugin.ts`，写一个读取 `package.json` 基本信息的 `pkgInfoPlugin`。
 
-不接第三方平台，先实现 `ConsoleTestChannel`：它可以由测试代码触发 IncomingMessage，并收集 OutgoingMessage。
+### 起步代码骨架
+新建 `src/plugins/pkg-info-plugin.ts`：
 
-### 验收
+```ts
+import fs from 'node:fs';
+import type { PluginDefinition } from './types.js';
 
-- Gateway 注册并启动；
-- 两个 senderId 有独立消息数组；
-- 同一 senderId 能多轮追问；
-- Channel 内没有复制模型和工具逻辑；
-- stop 后释放所有资源。
+export const pkgInfoPlugin: PluginDefinition = {
+  name: 'pkginfo',
+  version: '0.1.0',
+  description: '读取当前项目 package.json 元信息',
+  async activate(api) {
+    api.registerTools({
+      name: 'read_meta',
+      description: '返回项目名称、版本和脚本列表',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      execute: async () => {
+        const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
+        return { name: pkg.name, version: pkg.version, scripts: Object.keys(pkg.scripts || {}) };
+      },
+    });
+    api.log('pkginfo 插件已激活');
+  },
+  async destroy() {
+    console.log('  [plugin:pkginfo] 已清理资源');
+  },
+};
+```
 
-## 实验 15：Cron 任务
+在 `src/main.ts` 的 `availablePlugins` 里加上 `['pkginfo', pkgInfoPlugin]`。启动后输入 `/plugin` 会看到 `pkginfo__read_meta`，再试试 `/plugin unload pkginfo` 看工具是不是跟着注销了。
 
-### 操作
+---
 
-创建一个短间隔的随机名言任务，观察：
+## 实验 14：写一个不依赖飞书的测试 Channel（动手改造）
+
+### 目标
+实现一个最小 `ChannelDefinition`，验证不用修改 `agentLoop`，就能多出一条消息通道。
+
+### 起步代码骨架
+实现 `src/channels/types.ts` 接口：
+
+```ts
+import type { ChannelDefinition, IncomingMessage, OutgoingMessage } from './types.js';
+
+export class MemoryTestChannel implements ChannelDefinition {
+  name = 'memtest';
+  description = '本地内存测试通道';
+  private handler?: (msg: IncomingMessage) => void;
+  public outbox: OutgoingMessage[] = [];
+
+  async start() {}
+  async stop() { this.outbox = []; }
+  onMessage(fn: (msg: IncomingMessage) => void) { this.handler = fn; }
+  async send(msg: OutgoingMessage) { this.outbox.push(msg); }
+
+  // 供测试代码主动注入一条消息
+  simulateIncoming(senderId: string, text: string) {
+    this.handler?.({ channelId: 'test-room', senderId, senderName: senderId, text });
+  }
+}
+```
+
+把它注册进 `gateway` 后，分别用 `userA` 和 `userB` 调用 `simulateIncoming`，检查 `gateway` 内部是不是为两个人隔开了历史消息，且没有复制任何推理代码。
+
+---
+
+## 实验 15：Cron 定时任务（建议接真实模型）
+
+### 为什么需要真实模型
+`src/mock-model.ts` 没有内置 `cron_manage` 的触发词。接好真实 `DASHSCOPE_API_KEY` 后启动，输入：
+
+```text
+帮我创建一个 id 为 quote-demo、每 20 秒跑一次 random-quote handler 的定时任务
+```
+
+等二十多秒看终端自动弹出的通知，再输入：
 
 ```text
 /cron
 /cron logs
 ```
 
-检查 `.cron/jobs.json` 和 `.cron/logs.jsonl`。完成实验后用命令删除任务，避免持续触发。
+并打开 `.cron/jobs.json` 和 `.cron/logs.jsonl` 看落盘结构。
 
-### 故障实验
-
-设计一个总是失败的测试 handler，观察连续失败次数达到阈值后是否自动禁用。不要用真实外部副作用作为失败实验。
-
-## 实验 16：Sub-Agent 分治
-
-### 操作
+**实验做完怎么删掉任务？**
+注意 `src/commands/cron.ts` **没有** `/cron remove` 命令（它只有 `list` 和 `logs`），所以要直接对模型说：
 
 ```text
-请并行分析 src/rag、src/memory 和 src/context，各自总结职责和边界，最后给出对比
+把 id 为 quote-demo 的定时任务删掉
 ```
 
-然后查看：
+（或者退出后直接把 `.cron/jobs.json` 清空。）
+
+---
+
+## 实验 16：Sub-Agent 并行分治（建议接真实模型）
+
+### 为什么需要真实模型
+同样因为 `src/mock-model.ts` 没写 `spawn_agent` 的触发词，请接真实 `DASHSCOPE_API_KEY` 后输入：
 
 ```text
-/agents
+请用子 Agent 并行分析 src/rag、src/memory 和 src/context 三个目录的职责和局限，最后给我一份对比总结
 ```
 
-### 观察
+跑完后输入 `/agents`，对照终端彩色 `[Agent-1:xxx]` 日志观察：
+1. 三个子 Agent 是不是同时启动、各有各的 Step 计数？
+2. 如果你刻意派 4 个子任务，超过 `maxConcurrent: 3` 的第 4 个是怎么被拒绝的？
+3. 子 Agent 为什么没法再往下派生孙子 Agent？
 
-- 每个子 Agent 有独立消息；
-- 最大并发限制如何裁剪任务；
-- 主 Agent 如何拿到结果并综合；
-- 子 Agent 工具集合为什么排除 `spawn_agent`。
+---
 
-## 实验 17：完整请求复盘
+## 实验 17：一次复杂任务的端到端复盘（建议接真实模型）
 
-选择一个会触发 RAG、文件读取和最终总结的请求。建立表格：
+挑一个既需要查知识库、又需要读代码、最后汇总回答的问题（例如：`根据部署文档里的监控告警要求，结合当前代码实现，说说还缺哪些能力？`）。
 
-| 时间/Step | 输入上下文 | 模型决定 | 工具 | 工具结果 | Token | 状态变化 |
-| --- | --- | --- | --- | --- | --- | --- |
+跑完后翻开终端日志、`.sessions/default.jsonl`、`.traces/<本轮>.jsonl` 和 `.usage/today.jsonl`，把每一步填进下面这张表里：
 
-资料来源：终端、Trace、Session、Usage、RAG 源文档。最终用自己的话回答：
+| Step | 发给模型的上下文概览 | 模型决定调用什么工具 | 工具返回摘要 | 本步 Token | 落盘了什么状态 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | ... | `rag_search` | ... | ... | ... |
+| 2 | ... | `read_file` | ... | ... | ... |
+| 3 | ... | 无工具，最终回答 | — | ... | ... |
 
-1. 模型做了哪些决定？
-2. 运行时做了哪些决定？
-3. 哪些结果被持久化？
-4. 如果进程此刻崩溃，哪些状态会丢？
-
-完成这个实验，才算真正把整个项目串起来。
+最后试着回答 4 个终极问题——能答上来，说明你已经真正吃透这套源码了：
+1. 这一轮里，哪些决定是**模型**做的，哪些约束是**运行时代码**替你兜底的？
+2. 哪些数据写进了硬盘，哪些还只留在内存里？
+3. 如果进程在 Step 2 刚跑完工具那一秒突然断电，重启后会丢掉什么？
+4. 如果今天要把这个项目给 100 个同事同时用，最先炸掉的三个模块是哪三个？

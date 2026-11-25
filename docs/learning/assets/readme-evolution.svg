@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 470" width="100%" height="auto" role="img" aria-label="SuperAgent 演进主线图">
+  <defs>
+    <style>
+      .font { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+    <marker id="arr-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#4169E1"/>
+    </marker>
+    <filter id="sh" x="-4%" y="-4%" width="108%" height="114%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#1C3152" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+
+  <rect x="1" y="1" width="1118" height="468" rx="16" fill="#F8FAFF" stroke="#E3E9F2" stroke-width="1.5"/>
+
+  <text x="40" y="42" class="font" font-size="22" font-weight="750" fill="#17243B">SuperAgent 演进主线：从聊天壳到完整运行时</text>
+  <text x="40" y="66" class="font" font-size="13" fill="#5D6A80">每一层模块都在解决一个具体的工程问题，整本手册按这 6 个台阶依次展开</text>
+
+  <!-- Row 1: Steps 1 -> 2 -> 3 -->
+  <g filter="url(#sh)">
+    <!-- Step 1 -->
+    <rect x="40" y="102" width="296" height="122" rx="12" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <rect x="58" y="118" width="54" height="22" rx="11" fill="#EEF2FF"/>
+    <text x="85" y="133" text-anchor="middle" class="mono" font-size="11" font-weight="700" fill="#3158C9">STEP 1</text>
+    <text x="122" y="134" class="font" font-size="15.5" font-weight="750" fill="#17243B">模型能回答</text>
+    <text x="58" y="164" class="font" font-size="12.5" fill="#475569">单次发 Prompt，模型输出文本</text>
+    <text x="58" y="186" class="font" font-size="11.5" fill="#64748B">无记忆、无行动，只是基础 API 调用</text>
+    <text x="58" y="208" class="mono" font-size="11" fill="#3158C9">第 01 章 · Provider 抽象</text>
+
+    <!-- Step 2 -->
+    <rect x="412" y="102" width="296" height="122" rx="12" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <rect x="430" y="118" width="54" height="22" rx="11" fill="#EEF2FF"/>
+    <text x="457" y="133" text-anchor="middle" class="mono" font-size="11" font-weight="700" fill="#3158C9">STEP 2</text>
+    <text x="494" y="134" class="font" font-size="15.5" font-weight="750" fill="#17243B">变成多轮聊天程序</text>
+    <text x="430" y="164" class="font" font-size="12.5" fill="#475569">+ 消息历史数组与流式打印</text>
+    <text x="430" y="186" class="font" font-size="11.5" fill="#64748B">用 ModelMessage[] 记住上下文，边生成边输出</text>
+    <text x="430" y="208" class="mono" font-size="11" fill="#3158C9">第 01 章 · streamText + fullStream</text>
+
+    <!-- Step 3 -->
+    <rect x="784" y="102" width="296" height="122" rx="12" fill="#FFFFFF" stroke="#4169E1" stroke-width="2"/>
+    <rect x="802" y="118" width="54" height="22" rx="11" fill="#4169E1"/>
+    <text x="829" y="133" text-anchor="middle" class="mono" font-size="11" font-weight="700" fill="#FFFFFF">STEP 3</text>
+    <text x="866" y="134" class="font" font-size="15.5" font-weight="750" fill="#17243B">Agent 能动手做事</text>
+    <text x="802" y="164" class="font" font-size="12.5" fill="#475569">+ 工具 Schema 与本地执行循环</text>
+    <text x="802" y="186" class="font" font-size="11.5" fill="#64748B">Think → Act → Observe 形成闭环</text>
+    <text x="802" y="208" class="mono" font-size="11" fill="#3158C9">第 01–02 章 · agentLoop + ToolRegistry</text>
+  </g>
+
+  <!-- Arrows Row 1 -->
+  <line x1="336" y1="163" x2="406" y2="163" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b)"/>
+  <line x1="708" y1="163" x2="778" y2="163" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b)"/>
+
+  <!-- Wrap Connector from Step 3 down to Step 4 -->
+  <path d="M 932 224 L 932 254 L 188 254 L 188 288" fill="none" stroke="#4169E1" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arr-b)"/>
+  <rect x="468" y="242" width="184" height="22" rx="11" fill="#EEF2FF" stroke="#C7D7FE"/>
+  <text x="560" y="257" text-anchor="middle" class="font" font-size="11" font-weight="600" fill="#3158C9">从“能干活”走向“工程化”</text>
+
+  <!-- Row 2: Steps 4 -> 5 -> 6 -->
+  <g filter="url(#sh)">
+    <!-- Step 4 -->
+    <rect x="40" y="294" width="296" height="132" rx="12" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <rect x="58" y="310" width="54" height="22" rx="11" fill="#EEF2FF"/>
+    <text x="85" y="325" text-anchor="middle" class="mono" font-size="11" font-weight="700" fill="#3158C9">STEP 4</text>
+    <text x="122" y="326" class="font" font-size="15.5" font-weight="750" fill="#17243B">Agent 能持续工作</text>
+    <text x="58" y="356" class="font" font-size="12.5" fill="#475569">+ 上下文治理、长期记忆与 RAG</text>
+    <text x="58" y="378" class="font" font-size="11.5" fill="#64748B">防窗口撑爆、跨会话记偏好、检索外部文档</text>
+    <text x="58" y="406" class="mono" font-size="11" fill="#3158C9">第 03–04 章 · Context / Memory / RAG</text>
+
+    <!-- Step 5 -->
+    <rect x="412" y="294" width="296" height="132" rx="12" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <rect x="430" y="310" width="54" height="22" rx="11" fill="#EEF2FF"/>
+    <text x="457" y="325" text-anchor="middle" class="mono" font-size="11" font-weight="700" fill="#3158C9">STEP 5</text>
+    <text x="494" y="326" class="font" font-size="15.5" font-weight="750" fill="#17243B">长成小型运行时</text>
+    <text x="430" y="356" class="font" font-size="12.5" fill="#475569">+ 扩展机制、通道、调度与子 Agent</text>
+    <text x="430" y="378" class="font" font-size="11.5" fill="#64748B">Skill/Plugin/MCP 扩能力，飞书/Cron/分治提效</text>
+    <text x="430" y="406" class="mono" font-size="11" fill="#3158C9">第 05–06 章 · 扩展、Channel 与调度</text>
+
+    <!-- Step 6 -->
+    <rect x="784" y="294" width="296" height="132" rx="12" fill="#EFF4FF" stroke="#4169E1" stroke-width="2"/>
+    <rect x="802" y="310" width="54" height="22" rx="11" fill="#4169E1"/>
+    <text x="829" y="325" text-anchor="middle" class="mono" font-size="11" font-weight="700" fill="#FFFFFF">STEP 6</text>
+    <text x="866" y="326" class="font" font-size="15.5" font-weight="750" fill="#1E3A8A">可调试可演进系统</text>
+    <text x="802" y="356" class="font" font-size="12.5" fill="#1E3A8A">+ 权限、Hook、Trace 与状态边界</text>
+    <text x="802" y="378" class="font" font-size="11.5" fill="#3158C9">守住安全底线、出事可回放、分清 Demo 与生产</text>
+    <text x="802" y="406" class="mono" font-size="11" fill="#3158C9">第 06–09 章 · Security / Trace / Roadmap</text>
+  </g>
+
+  <!-- Arrows Row 2 -->
+  <line x1="336" y1="360" x2="406" y2="360" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b)"/>
+  <line x1="708" y1="360" x2="778" y2="360" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b)"/>
+</svg>

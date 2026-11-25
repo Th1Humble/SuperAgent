@@ -1,267 +1,119 @@
-# 07. 配置、命令、启动与可观测性
+# 07. 启动、配置、命令行与可观测性
 
-## 7.1 两个入口分支
+前面把所有积木块都看完了，这一章回到入口，搞清楚三件很实际的事：**配置怎么读进来才不会踩坑**、**命令分发和启停顺序是什么**、**线上或实验跑歪了怎么靠 Trace 排查**。
 
-`src/index.ts` 很短：
+## 7.1 入口与配置加载的微妙顺序
 
-```text
-argv[2] === "init" → 动态导入 config/init.ts
-其他情况          → 动态导入 main.ts 并 startAgent()
-```
+看 `src/index.ts`：总共只有 6 行，看命令行参数是不是 `init`，再决定动态 `import('./config/init.js')` 还是 `import('./main.ts')`。之所以用动态导入，是因为 `main.ts` 顶层有很多立即执行的初始化代码，跑配置向导时没必要把那些东西全拉起来。
 
-动态导入很重要：运行初始化向导时不会提前执行 `main.ts` 顶层代码，也就不会加载配置、创建模型和启动服务。
+进入 `main.ts` 后，前两行就决定了整个系统的运行模式：
+1. `import 'dotenv/config'` 把 `.env` 读进 `process.env`；
+2. `loadConfig()` 读取 `super-agent.config.json`（没有就用 Zod 默认配置），并把字符串里的 `${UPPER_CASE}` 替换成对应环境变量。
 
-`pnpm run continue` 传入的是 `--continue`，当前仍走普通启动分支，没有专门恢复逻辑。
+> **最容易踩坑的环境变量逻辑（`src/config/loader.ts`）**：
+> - 如果你在配置里写了 `"apiKey": "${DASHSCOPE_API_KEY}"`，**而 `.env` 里根本没有这一行**（值为 `undefined`），`substituteEnvVars` 会打印一条警告并**保留原字符串 `"${DASHSCOPE_API_KEY}"`**。因为字符串非空，程序反而会误以为“有 Key”，去请求 DashScope 然后报认证错误；
+> - 只有当 `.env` 里显式写了 `DASHSCOPE_API_KEY=`（值为空字符串 `""`）时，替换结果才是 `""`，程序才会安心进入 Mock 模式。
 
-## 7.2 配置来源与优先关系
-
-运行时先通过 `dotenv/config` 加载 `.env`，再由 `loadConfig()` 读取 `super-agent.config.json`。
-
-配置文件中的字符串可以写：
-
-```json
-{"apiKey":"${DASHSCOPE_API_KEY}"}
-```
-
-`substituteEnvVars()` 会递归替换对象和数组中的 `${UPPER_CASE_NAME}`。若变量未定义，会保留原字符串并警告。
-
-注意：未定义时保留 `${NAME}` 是非空字符串。对于 `model.apiKey`，这可能让程序误以为存在 Key 并尝试真实模型。README 推荐创建 `.env` 且变量留空，使替换结果成为空字符串并进入 Mock。
-
-## 7.3 Zod Schema
-
-Schema 负责：
-
-- 结构验证；
-- 默认值；
-- 数值范围；
-- 推导 `SuperAgentConfig` 类型。
-
-配置块包括 model、plugins、channels、agents、security、memory、rag、cron、session、usage。
-
-安全原则：Schema 中“有字段”不代表运行时“已使用字段”。判断配置是否生效，要搜索 `config.<field>` 的读取位置。
-
-当前 `main.ts` 实际读取的主要是：
-
-- `config.model`
+### Schema 里的字段 ≠ 运行时已经生效
+`src/config/schema.ts` 为完整系统预留了 10 大块配置，但对照 `src/main.ts` 实际只读了这几项：
+- `config.model.*`
 - `config.memory.dataDir`
 - `config.cron.dataDir`
-- `config.agents.maxSpawnDepth/maxConcurrent`
-- `config.session.id`
+- `config.agents.maxSpawnDepth` / `maxConcurrent`
+- `config.session.id`（注意第 237 行创建 `SessionStore('default')` 时连这里都没传进去，只有 Trace 用了 `config.session.id`）
 
-插件 enabled、Channel 配置、RAG enabled/docsDir、安全配置、Usage 路径等没有完整接线。
+其余像 `plugins[].enabled`、`channels.feishu.*`（实际直接读 `process.env.FEISHU_*`）、`security.defaultRole`、`rag.docsDir`、`usage.trackingFile`、`agents.defaultTimeout` 目前都属于**“Schema 占了位、主程序还没接线”**的状态。看源码时想确认某个配置生效没有，直接全局搜 `config.<字段>` 最靠谱。
 
-## 7.4 初始化向导
+## 7.2 终端命令分发器：责任链模式
 
-`pnpm run init` 会询问：
+终端输入一行字后，怎么区分它是“跟模型聊的话”还是“控制系统的指令”？
 
-- 模型档位；
-- DashScope Key；
-- 是否启用飞书及凭据；
-- 子 Agent 最大并发数。
+`src/commands/index.ts` 用了一个极简的责任链：把 11 个命令模块的处理函数摊平进一个数组，按顺序挨个问“是不是归你管”：
+- 返回 `false`：不归我管，继续问下一个；
+- 返回 `true`：我同步处理完了，外面紧接着调 `ask()` 等下一行输入；
+- 返回 `'async'`：我要干异步活（比如 `ingest`、`/dream`、`/<skill-name>`），等我活干完会自己调 `ctx.ask()`，外层先别急着再问。
 
-然后写入 `super-agent.config.json`；如果直接输入 Key 或飞书凭据，还会写 `.env`。
+如果全问完都返回 `false`，才把它当成普通对话交给 `agentLoop()`。
 
-几个边界：
+初学者一定要分清 **Command（终端命令）** 和 **Tool（工具）** 的区别：
+- **Command** 是**你**手动敲给运行时看的（如 `/context`、`/role`），**不进模型上下文、不花 Token**；
+- **Tool** 是写进说明书发给**模型**、由模型自己挑着调的（如 `read_file`、`rag_search`），模型调完之后才产生结果回到对话里。
 
-- 覆盖配置前会询问，但写 `.env` 时没有合并已有内容；
-- 初始化生成 `security.defaultRole: developer`，与实际 Role 联合类型不一致；
-- 飞书字段进入配置，但主程序实际读取 `process.env.FEISHU_*`；
-- 推荐让 Key 留空并使用环境变量引用，避免凭据进入 JSON。
+## 7.3 启动顺序与关闭缺口
 
-## 7.5 Command Dispatcher
-
-命令系统使用责任链：
-
-```ts
-for (const handler of handlers) {
-  const result = handler(cmd, ctx);
-  if (result) return result;
-}
-return false;
-```
-
-返回值含义：
-
-- `false`：不是我的命令，交给下一个；
-- `true`：同步处理完成；
-- `'async'`：命令自己负责异步流程和再次调用 `ask()`。
-
-`CommandContext` 把 messages、timestamps、Registry、Builder、Tracker、Session、Model 等共享依赖集中传入。
-
-命令和 Tool 的区别：
-
-| Command | Tool |
-| --- | --- |
-| 用户在终端显式输入 | 模型自主选择 |
-| 不进入模型消息 | 定义会暴露给模型 |
-| 主要用于控制和诊断 | 主要用于完成任务 |
-| 只服务当前 CLI | 可被 CLI/Channel/Cron Agent 复用 |
-
-## 7.6 命令模块
-
-`src/commands/` 按领域拆分：
-
-- debug：模拟长对话、Cache、Context Defense 和状态查看；
-- context：上下文矩阵和 Usage；
-- memory、rag、dream；
-- skill、plugin、channel；
-- security：role、hooks；
-- cron、agent。
-
-带依赖的命令通过工厂函数创建，例如 `createCronCommands(cronService)`；纯命令导出数组，例如 `contextCommands`。
-
-## 7.7 启动顺序
-
-`main.ts` 的很多对象在模块加载时创建，`startAgent()` 负责有副作用的启动：
+`startAgent()` 的实际启动顺序是（`src/main.ts`）：
 
 ```text
-连接 Mock MCP
-  ↓
-加载可用 Plugins
-  ↓
-启动所有 Channels
-  ↓
-加载、注入执行器并启动 Cron
-  ↓
-创建 Session / Usage / readline
-  ↓
-输出运行信息
-  ↓
-扫描 docs/*.md 构建 RAG
-  ↓
-ask()
+连接 Mock MCP → 加载 Plugins → 启动 Channels (Dashboard/飞书) → 加载并启动 Cron
+  → 初始化 Session / Usage / readline → 打印欢迎提示 → 扫描 docs/*.md 构建 RAG → ask()
 ```
 
-目前 RAG 导入发生在 Channel 和 Cron 启动之后、终端 `ask()` 之前。理论上外部消息可能在知识库尚未构建完成时到达。
+看这个顺序能发现两个工程上的小细节：
+1. **RAG 构建放在了 Channel 和 Cron 启动之后**：理论上如果刚启动的一秒钟内飞书刚好进来一条消息，此时知识库还没导入完（生产项目通常会先把核心基础依赖准备好再开外部端口）；
+2. **退出清理只在 `exit`/空输入分支里**：输入 `exit` 会依次停止 Cron、Channel 和 Plugin，但目前没有显式调用 `registry.closeAllMCP()`（接入真实子进程 MCP 后容易留僵尸进程），也没有监听 `SIGINT`（`Ctrl+C`）。所以建议养成用 `exit` 退出的习惯。
 
-## 7.8 正常关闭
+## 7.4 三份运行记录别弄混：Session、Trace、Usage
 
-用户输入 `exit` 或空字符串时：
+项目跑起来后，根目录会冒出 `.sessions/`、`.traces/`、`.usage/`、`.cron/`、`.memory/` 五个隐藏目录（都在 `.gitignore` 里）。前三个最容易弄混：
 
-1. `cronService.stop()` 清除 Timer；
-2. `gateway.stopAll()` 停止 Channel；
-3. `pluginManager.unloadAll()` 调用插件清理并注销工具；
-4. `rl.close()`。
-
-当前没有显式调用 `registry.closeAllMCP()`，真实 MCP 接入后需要补充；也没有处理 SIGINT/SIGTERM 的统一优雅退出。
-
-## 7.9 Session、Trace、Usage 的区别
-
-| 记录 | 回答的问题 | 格式 |
+| 文件目录 | 它回答什么问题 | 什么时候写 |
 | --- | --- | --- |
-| Session | “对话里说了什么？” | `.sessions/<id>.jsonl` |
-| Trace | “这一轮每一步发生了什么？” | `.traces/<traceId>.jsonl` |
-| Usage | “用了多少 Token、估算多少钱？” | `.usage/today.jsonl` |
+| `.sessions/default.jsonl` | **聊了什么？**（用户和助手的往来消息） | 每次终端发消息和一轮结束时 |
+| `.traces/<id>.jsonl` | **模型每步到底看见了啥、怎么一步步决策的？** | 每一步模型调用前（`step_started`）和完成后（`step_completed`） |
+| `.usage/today.jsonl` | **一共花了多少 Token、缓存省了多少钱？** | 每个 Step 结束时追加一行账单 |
 
-三者不能互换。Session 是面向对话恢复，Trace 是面向执行复盘，Usage 是面向成本统计。
+### 为什么排查 Bug 主要看 Trace？
+想象一个典型抓狂场景：“我明明记得提示词里写过某某规则，为什么模型还是调错了工具？”
 
-## 7.10 Local Trace
+光看 `.sessions/` 是看不出来的，因为 Session 里没有 System Prompt，也没有模型出错重试的过程。打开 `.traces/` 对应的 `.jsonl` 文件，你会清清楚楚看到：
+- `step_started.context.system`：这一步发给模型的**逐字逐句完整 System Prompt**；
+- `step_started.context.messages`：当时传进去的历史消息数组长什么样；
+- `step_attempt_failed`：第几次尝试撞到了什么网络报错；
+- `step_completed.output` & `usage`：模型吐出了什么原始结构化部件、耗时多少毫秒。
 
-每个普通终端请求创建一个 Trace。事件包括：
-
-```text
-trace_started
-step_started
-step_attempt_failed (可选，多次)
-step_completed
-...
-trace_finished
+直接用项目自带的摘要命令行看一眼最方便：
+```bash
+pnpm run trace:inspect .traces/你的文件名.jsonl
 ```
 
-`step_started` 记录当时完整 System 和 Messages；`step_completed` 记录输出消息、文本、耗时和 Usage。
+当然，`src/trace/recorder.ts` 也有两个要注意的地方：
+1. **脱敏只是按字段名正则替换**：`SECRET_KEY` 会把键名含 `token`、`password`、`apiKey` 的字段值替换成 `[REDACTED]`，但如果你用 `read_file` 把 `.env` 的文件内容读进字符串正文里了，它还是会原样躺进 Trace；
+2. **只覆盖了普通终端主循环**：通过飞书/Dashboard（`ChannelGateway`）、Cron 定时任务和 Sub-Agent 内部跑的模型 Step，目前都没有传 `trace` 进去，出问题只能看终端控制台日志。
 
-`sanitize()` 会按 key 名匹配 api-key、token、secret、password、authorization 并替换为 `[REDACTED]`。这是基础防护，不保证正文中的秘密、非标准字段名或文件内容被清理。因此 Trace 在分享前仍要人工检查。
+## 7.5 一份顺手的故障排查清单
 
-如果写文件失败，Recorder 会停止后续写入但不让 Agent 主流程失败，体现“观测失败不阻塞业务”的选择。
+- **现象：模型死活不调用某个工具**
+  1. 输入 `/role` 看当前角色是不是误切成了 `guest` 或 `collaborator`；
+  2. 看启动日志确认工具到底有没有注册进 `Registry`；
+  3. 检查是不是延迟工具（`shouldDefer: true`），模型需要先调 `tool_search`；
+  4. 如果是 Mock 模式，核对你的提问有没有命中 `src/mock-model.ts` 的关键词；
+  5. 打开 `.traces/*.jsonl` 看 `step_started` 里消息是不是已经乱了。
+- **现象：问项目文档问题，模型完全没查知识库**
+  1. 输入 `/rag` 看片段数是不是 `0`，确认文档是不是放在 `docs/` 第一层（子目录不会自动导入）；
+  2. 注意 Mock Embedder 不懂同义词语义，提问尽量带文档里的关键词（或接真实 Key）。
+- **现象：改了 `super-agent.config.json` 但好像没生效**
+  1. 看启动第一屏有没有打印 `✓ 已加载 super-agent.config.json`；
+  2. 全局搜 `config.<你改的字段>`，确认它是不是属于上面提到的“Schema 预留但 `main.ts` 还没读取”的配置项。
 
-## 7.11 Trace Inspect
+## 7.6 动手试一试（对照三份持久化文件）
 
-`pnpm run trace:inspect <file>` 会输出：
+在终端跑一次需要调工具的对话（比如 `读取 package.json`），然后分别查看刚生成的 `.sessions/default.jsonl`、终端末尾打印的 `.traces/...jsonl` 以及 `.usage/today.jsonl`（也可以用 `pnpm run trace:inspect` 看摘要），用自己的话对比这三份文件各自记录了什么、没记录什么。
 
-- Trace ID；
-- 每步上下文消息数量；
-- 耗时；
-- Token；
-- 工具名称；
-- 最终状态。
+## 7.7 本章自检
 
-它是摘要查看器，不会重放执行。真正复盘时可直接逐行阅读 JSONL。
+1. 为什么在 `super-agent.config.json` 里写了 `"${DASHSCOPE_API_KEY}"`，但没建 `.env` 文件时程序会报错而不是走 Mock？
+2. 终端输入 `/context` 和模型调用 `read_file`，两者最本质的区别是什么？
+3. 如果 `LocalTraceRecorder` 写入磁盘时突然没权限报错了，会导致整个 Agent 对话崩溃吗？
+4. 飞书发来的消息出错了，去 `.traces/` 目录下找得到它的轨迹吗？为什么？
+5. 当前按 `exit` 退出和直接按 `Ctrl+C` 退出有什么区别？
 
-## 7.12 可观测性缺口
+<details>
+<summary>参考思路（点击展开）</summary>
 
-当前 Trace 只包裹普通终端请求。以下路径没有同等记录：
+1. 当环境变量为 `undefined` 时，`substituteEnvVars()` 会保留原字面量 `"${DASHSCOPE_API_KEY}"`。因为是非空字符串，`createModel()` 认为已有 Key 从而连接真实接口，最终因 Key 无效报错。只有 `.env` 里定义了空值 `DASHSCOPE_API_KEY=`，替换后才是 `""` 从而进入 Mock。
+2. `/context` 是用户敲给 CLI 分发器的本地控制命令，不走模型、不进 `messages`；`read_file` 是暴露给模型的工具，由模型在推理过程中自主决定调用并产生上下文消耗。
+3. 不会。`recorder.ts` 的 `write()` 在首次写失败后会把 `this.writeFailed` 设为 `true` 并打印警告，后续不再写入，体现“可观测性失败不阻塞主业务”的设计原则。
+4. 找不到。目前只在 `main.ts` 的普通终端主循环里创建并传入了 `LocalTraceRecorder`，`ChannelGateway`、`CronService` 和 `spawnAgent` 调用 `agentLoop` 时都没有传入 `trace` 实例。
+5. 输入 `exit` 会主动调用 `cronService.stop()`、`gateway.stopAll()` 和 `pluginManager.unloadAll()` 做清理；直接按 `Ctrl+C` 会触发未处理的信号直接退出进程（另外即便走 `exit`，目前也还没调用 `registry.closeAllMCP()`）。
 
-- ChannelGateway 的 Agent Loop；
-- Cron 的 Agent Loop；
-- Sub-Agent 自己的模型 Step；
-- 启动阶段 RAG 导入；
-- Plugin/MCP 的连接耗时。
-
-此外 Session 的时间戳和 `timestamps` Map 是两套来源，重启后 TTL 信息不会恢复。
-
-## 7.13 运行时文件
-
-```text
-.sessions/  对话记录
-.traces/    每轮执行轨迹
-.usage/     Token 与费用
-.cron/      定时任务和日志
-.memory/    长期记忆
-```
-
-这些目录已在 `.gitignore` 中，但可能含用户输入、工具结果、路径和项目内容。Git 忽略不等于安全加密，应设置本地权限、清理策略和分享流程。
-
-## 7.14 故障定位路径
-
-### Agent 没使用某个工具
-
-1. `/role` 看当前角色和活动工具数量，启动日志看注册情况；
-2. 检查 Role；
-3. 检查 Profile；
-4. 看是否为 deferred，需要 tool_search；
-5. 查看 Trace 中发给模型的工具调用。
-
-### 回答没有使用知识库
-
-1. `/rag` 看片段数量；
-2. 确认文件在 `docs/` 第一层或已 ingest；
-3. 直接测试 `rag_search`；
-4. 检查 Mock Embedding 的质量边界；
-5. 看模型是否决定调用工具。
-
-### 配置看似不生效
-
-1. 看启动日志是否加载配置；
-2. 检查环境变量替换；
-3. 搜索该字段是否在 `main.ts` 被消费；
-4. 区分 config 字段和直接读取 `process.env`；
-5. 检查是否被硬编码路径覆盖。
-
-## 7.15 实践
-
-执行一次需要两个工具的任务后：
-
-```text
-/context
-/usage
-/role
-/hooks
-```
-
-然后同时对照：
-
-```text
-.sessions/default.jsonl
-.traces/<本轮文件>.jsonl
-.usage/today.jsonl
-```
-
-尝试写出同一轮请求在三个文件中分别能找到什么、找不到什么。
-
-## 7.16 本章自检
-
-1. 为什么 init 使用动态 import？
-2. 配置 Schema 中存在的字段一定生效吗？
-3. Command 与 Tool 的调用者分别是谁？
-4. Session、Trace、Usage 各自解决什么问题？
-5. 当前关闭流程还缺少哪些资源清理？
+</details>

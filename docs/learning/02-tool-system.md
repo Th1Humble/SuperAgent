@@ -1,16 +1,16 @@
-# 02. 工具系统：让 Agent 能做事
+# 02. 工具系统：让 Agent 能动手做事
 
-## 2.1 工具是什么
+模型本身只能“想”和“说”，不能读硬盘、也不能敲命令。工具系统的职责，就是把你愿意开放给它的本地函数包成标准说明书递给模型，并在模型提出请求时安全地替它跑起来。
 
-对模型来说，工具是一份可选择的能力说明；对运行时来说，工具是一个受约束的 JavaScript 执行器。两者通过结构化协议连接。
+## 2.1 一个工具长什么样
 
-本项目中的 `ToolDefinition` 包含：
+在 `src/tools/registry.ts` 里，每个工具都要按 `ToolDefinition` 来定义：
 
 ```ts
-interface ToolDefinition {
+export interface ToolDefinition {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  parameters: Record<string, unknown>; // JSON Schema
   execute: (input: any) => Promise<unknown>;
   isConcurrencySafe?: boolean;
   isReadOnly?: boolean;
@@ -21,261 +21,166 @@ interface ToolDefinition {
 }
 ```
 
-最核心的是四项：名称、描述、参数 Schema、执行函数。其余字段负责运行时治理。
+前 4 个字段决定“**这工具干嘛用、收什么参数、怎么执行**”，后面 6 个字段全是给运行时做治理用的（并发锁、截断、裁剪、延迟加载）。
 
-## 2.2 模型如何调用本地函数
+## 2.2 模型到底怎么“调”到本地函数的
 
-完整链路如下：
-
-```text
-ToolDefinition
-  ↓ ToolRegistry.toAISDKFormat()
-AI SDK tool schema + execute
-  ↓ 随模型请求发送
-模型选择工具并生成 JSON 参数
-  ↓ AI SDK 校验并调用 execute
-本地函数执行
-  ↓
-结果转成 tool-result
-  ↓
-下一 Step 重新交给模型
-```
-
-模型只生成“我要调用什么和参数是什么”，没有直接获得 Node.js 执行权限。真正执行发生在应用进程中。
-
-## 2.3 ToolRegistry 的职责
-
-`src/tools/registry.ts` 是工具系统中心。它承担：
-
-- 注册、覆盖和卸载工具；
-- 连接 MCP Server 并把远程工具注册成本地定义；
-- 根据 Profile 过滤；
-- 根据角色过滤；
-- 隐藏尚未发现的延迟工具；
-- 将 JSON Schema 转成 AI SDK 格式；
-- 在执行前做 Bash 风险识别和 Pre Hook；
-- 管理并发/独占执行；
-- 截断结果；
-- 在执行后做 Post Hook。
-
-这意味着 Registry 不只是一个 `Map`，而是工具执行的策略边界。
-
-## 2.4 工具注册与覆盖
-
-`register(...tools)` 以工具名作为 Map key。相同名称后注册会覆盖先注册的定义。网页搜索利用了这一点：`pickSearchTool()` 根据环境变量返回 Tavily 或 Serper 实现，但统一名称都是 `web_search`。
-
-插件工具会增加命名空间，如：
+很多新手会误以为模型直接获得了执行 JavaScript 的权限，其实不是：
 
 ```text
-supabase__query
-supabase__insert
+我们的 ToolDefinition
+  ↓ ToolRegistry.toAISDKFormat() 转成 AI SDK 格式
+连同系统提示词一起发给模型
+  ↓
+模型决定调用，吐出一段 JSON：{ toolName: "read_file", input: { path: "package.json" } }
+  ↓
+AI SDK 在本地 Node.js 进程里校验参数并执行 execute()
+  ↓
+拿到返回值，经截断和 Hook 处理后包装成 tool-result
+  ↓
+放进 messages，下一轮再发给模型看
 ```
 
-MCP 工具则使用：
+换句话说，**模型只负责“填申请表”，真正把函数跑起来的是本地应用进程**。
+
+## 2.3 `ToolRegistry` 不只是个 `Map`
+
+把所有工具塞进一个对象里很容易，但真正工程化的难点在“管住它”。`src/tools/registry.ts` 把整个工具治理全收口在一个类里：
+
+- 增删改查工具、按命名空间挂入 MCP 工具；
+- 按当前 Profile（场景档位）、Role（用户角色）、是否已发现（`shouldDefer`）过滤“本轮模型能看到哪些工具”；
+- 把定义转换成 AI SDK 需要的 `jsonSchema` + `execute` 包装；
+- 执行前先跑 Bash 危险命令检查和 Pre Hook；
+- 用并发/独占锁协调同一批并行工具；
+- 执行完把超长结果截断，再过一遍 Post Hook。
+
+## 2.4 注册、覆盖与命名空间
+
+`registry.register(...tools)` 按工具 `name` 存进 `Map`，重名时**后注册的会覆盖先注册的**。
+
+项目里网页搜索就用到了这个技巧：`src/tools/web-search.ts` 里的 `pickSearchTool()` 会检查环境变量，有 `TAVILY_API_KEY` 就返回 Tavily 版，否则看 `SERPER_API_KEY`，但对外暴露的工具名统一叫 `web_search`——上层逻辑完全不用关心换了哪家搜索。
+
+而来自外部插件和 MCP 的工具为了防止重名冲突，会自动加上前缀：
+- 插件工具：`<插件名>__<工具名>`，比如 `supabase__query`、`supabase__insert`；
+- MCP 工具：`mcp__<服务名>__<工具名>`，比如 `mcp__github__list_issues`。
+
+加前缀还有一个好处：看日志、做权限控制时一眼就能看出工具是谁提供的。
+
+## 2.5 内置工具一览（顺便看清哪些只是教学简化版）
+
+`src/tools/index.ts` 汇总了基础工具，其它领域工具则在 `src/main.ts` 里逐个注册进来：
+
+| 分类 | 工具名 | 并发/读写属性 | 新手需要注意的局限 |
+| --- | --- | --- | --- |
+| 文件操作 | `read_file`、`list_directory` | 只读 / 可并发 | 没有做“工作区根目录沙箱”，理论上能读到项目外路径 |
+| 文件写入 | `write_file`、`edit_file` | 写 / 独占 | `edit_file` 靠精确字符串替换，原文本出现多次或有空格差异会踩坑 |
+| 项目搜索 | `glob`、`grep` | 只读 / 可并发 | 自己写的简版递归，分别上限 100 文件 / 50 处匹配，没处理二进制和复杂 `.gitignore` |
+| Shell | `bash` | 写 / 独占 | 用同步 `execSync` 跑（超时 10 秒、缓冲 1MB），执行期间会卡住整个 Node 事件循环 |
+| 网页 | `web_search`、`web_fetch` | 只读 / 可并发 | `web_fetch` 把抓回来的网页直接转 Markdown；注意网页里可能藏 Prompt 注入文本 |
+| 示例工具 | `get_weather`、`calculator` | 只读 / 可并发 | 天气是写死城市数据；`calculator` 用 `new Function()` 算表达式，生产环境绝对不能这样用 |
+| 领域能力 | `memory`、`rag_ingest`、`rag_search`、`cron_manage`、`spawn_agent` | 视读写而定 | 在 `main.ts` 分别注册（注意定时工具在源码里叫 `cron_manage`） |
+
+## 2.6 并发安全与读写锁
+
+在 `src/agent/loop.ts` 里开启了 `parallelToolCalls: true`。一次模型回复可能同时丢出来好几个工具请求，比如一边查天气一边读文件，或者一边写文件一边再读同一个文件。
+
+怎么保证不会乱套？`ToolRegistry` 用两个状态做了一把简易读写锁：
+- `concurrentCount`：当前正在并发跑的“安全工具”数量；
+- `exclusiveLock`：是不是正在跑某个“独占工具”（如 `write_file`、`bash`）。
+
+规则很简单：
+- **并发安全工具**（`isConcurrencySafe: true`）：只要当前没有独占锁（`!exclusiveLock`），就能直接进，把 `concurrentCount + 1`；
+- **独占工具**：必须等到 `exclusiveLock === false` 且 `concurrentCount === 0`（手头所有读操作都结束了），才能把 `exclusiveLock` 置为 `true` 单独跑。跑完调用 `drainQueue()` 唤醒排队的任务。
+
+> **代码里的边界**：这是一把教学版“非公平锁”——只要读工具不断插队进来，排队的写工具可能会一直等（写饥饿），而且等待队列没有超时取消机制。真正高并发服务需要公平队列或按资源路径分段加锁。
+
+## 2.7 结果截断：防止一个大文件把上下文撑爆
+
+如果模型调 `read_file` 读了一个 5 万字的日志全塞回 `messages`，下一轮请求不仅巨贵，还可能直接超出模型窗口。
+
+`truncateResult()`（`src/tools/registry.ts`）默认把工具输出限制在 **3000 字符**（单工具可通过 `maxResultChars` 改写）。而且它不是粗暴砍掉尾巴，而是**保留前 60% + 后 40%**，中间插一行 `... [省略 xxx 字符] ...`。
+
+之所以“保头保尾”，是因为代码和日志最关键的信息往往就在开头（文件导入、报错入口）和末尾（堆栈底部的真正错误原因、最终汇总）。
+
+## 2.8 为什么“已注册”不等于“模型能看见”
+
+每一轮请求发给模型前，`getActiveTools()` 会连着过三道筛子（`src/tools/registry.ts`）：
+
+1. **Profile 过滤**：如果工具声明了 `profile`，当前 `activeProfile` 必须在里面；
+2. **延迟发现过滤**：如果工具设了 `shouldDefer: true`，只有被 `tool_search` 查过（进过 `discoveredTools` 集合）才会露面；
+3. **角色权限过滤**：`canUseTool(currentRole, tool.name)` 必须放行。
+
+所以以后调试发现“模型死活不用某个工具”，别光顾着改 Prompt，先检查它有没有被这三道筛子挡掉。
+
+## 2.9 为什么需要 `tool_search`（延迟发现）
+
+你可能会想：干嘛不把所有工具一股脑全塞给模型？
+
+因为**每个工具的 JSON Schema 都要算进输入 Token**。如果接了十几个 MCP 服务、上百个工具，光工具说明书就能吃掉几万 Token，每轮对话都在白烧钱，而且几十个长得差不多的工具放一起，模型选错的概率会飙升。
+
+项目演示了 Anthropic 常用的延迟加载思路：
+1. MCP 工具在注册时默认加上 `shouldDefer: true` 和简短的 `searchHint`；
+2. System Prompt 里只放一行简短清单（“以下工具可用，但需要先通过 `tool_search` 获取完整定义”）；
+3. 当模型真的要查 GitHub Issue 时，先调 `tool_search({ query: "mcp__github__list_issues" })`；
+4. `Registry` 把它加进 `discoveredTools`；从**下一个 Step** 开始，`toAISDKFormat()` 才会把完整参数 Schema 发给模型。
+
+> **说清楚真实实现**：当前 `searchTools()`（`src/tools/registry.ts`）其实只支持**精确工具名**或逗号分隔的多个工具名，并没有做语义检索或关键词模糊匹配。`searchHint` 只是印在 System Prompt 里给模型看的提示语。
+
+## 2.10 Hook 在执行链里的准确位置
+
+当你调用 `toAISDKFormat()` 把工具包好，真正跑一次工具的顺序是这样的：
 
 ```text
-mcp__github__list_issues
-mcp__github__search_repositories
+1. 如果是 bash，先过 classifyBashCommand() 风险识别（危险直接拒）
+2. 跑 Pre Hooks（可拦截 block，代码里也留了 modify 入口）
+3. 抢并发锁 或 独占锁
+4. 真正执行 tool.execute(input)
+5. 转字符串并做 truncateResult 截断
+6. 跑 Post Hooks（如给 bash 输出加上时间戳）
+7. finally 里释放锁
 ```
 
-前缀避免不同来源的工具重名，也能让权限和审计更容易识别来源。
+注：子 Agent 内部调用的是 `toAISDKFormatUnlocked()`（`src/tools/registry.ts`），跳过了锁、Bash 风险识别和 Hook——这部分设计权衡在第 06 章细拆。
 
-## 2.5 内置工具分类
+## 2.11 亲手加一个新工具要几步
 
-### 文件工具
+假设想加一个只读统计目录文件数的工具 `count_files`：
 
-- `read_file`：按路径读取，支持 offset/limit；
-- `write_file`：创建目录后写入完整内容；
-- `edit_file`：用精确字符串替换局部内容；
-- `list_directory`：列出目录和条目类型。
+1. 在 `src/tools/` 下新建文件（或加进现有工具文件），导出一个 `ToolDefinition`：
+   - 写清 `description`（告诉模型**什么时候该用它**，不要只把名字翻译一遍）；
+   - `parameters` 尽量加上 `required` 和 `additionalProperties: false`；
+   - 只读且不改状态的，老实标上 `isReadOnly: true` 和 `isConcurrencySafe: true`。
+2. 在 `src/tools/index.ts` 把它加进 `allTools` 数组。
+3. 重启 `pnpm start`，看启动日志里的可用工具数量是不是多了一个。
 
-写工具被标记为非只读、非并发安全。`edit_file` 要求旧文本精确出现，找不到或出现多次时应谨慎处理，避免错误替换。
+## 2.12 动手试一试（Mock 模式专属口令）
 
-### 项目搜索
-
-- `glob`：递归遍历后用简化通配符匹配，最多 100 个结果；
-- `grep`：用正则逐文件搜索，最多 50 条匹配。
-
-这两个是教学实现，不等价于成熟的 `fast-glob` 或 ripgrep：忽略规则、符号链接、二进制识别和大型仓库性能都较简单。
-
-### Shell
-
-`bash` 用 `execSync` 执行命令，超时 10 秒、缓冲区 1MB。执行前 Registry 会先经过 Bash 风险分类。
-
-同步执行会阻塞 Node.js 事件循环，因此只适合教学和短命令。生产系统通常使用异步子进程、沙箱、工作目录约束和更严格的资源限制。
-
-### Web
-
-- `web_search`：按环境变量选择 Tavily 或 Serper；
-- `web_fetch`：抓取 HTML，并用 Turndown 转 Markdown。
-
-所有网页正文仍是不可信输入，不能把网页中的指令当作系统授权。当前代码尚未实现完整的 Prompt Injection 防护。
-
-### 示例工具
-
-- `get_weather`：本地固定数据；
-- `calculator`：用动态函数执行表达式。
-
-`calculator` 的实现便于演示，但 `new Function()` 不适合接收不可信表达式。生产实现应使用安全解析器和允许的运算符白名单。
-
-### 领域工具
-
-- `memory`：长期记忆的 list/read/write/search/delete/lint；
-- `rag_ingest`、`rag_search`：导入和检索知识；
-- `cron`：创建、列出、运行、启停、删除定时任务；
-- `spawn_agent`：派发一个或多个子 Agent。
-
-## 2.6 并发安全和读写锁
-
-AI SDK 开启了 `parallelToolCalls`，一个模型响应可能同时请求多个工具。如果两个工具都读取独立数据，可以并发；如果涉及写入或不可重入资源，则需要串行。
-
-Registry 使用两种状态：
-
-- `concurrentCount`：当前并发安全工具数量；
-- `exclusiveLock`：是否正在运行独占工具。
-
-规则是：
-
-```text
-安全工具：只等待 exclusiveLock，然后 concurrentCount + 1
-独占工具：等待 exclusiveLock=false 且 concurrentCount=0，再独占
-```
-
-结束时通过 `drainQueue()` 唤醒等待者重新检查条件。
-
-这里不是完整公平读写锁：新来的读任务可能在写任务等待时继续进入，存在写饥饿可能。它足以解释并发分类，但生产实现需考虑公平性、超时和取消。
-
-## 2.7 结果截断
-
-工具可能返回超长文件或网页。全部塞回上下文会快速消耗 Token。`truncateResult()` 默认保留 3000 字符：
-
-- 前 60%；
-- 后 40%；
-- 中间插入省略提示。
-
-同时保留头尾比只保留开头更适合日志和代码：声明通常在前面，错误和总结可能在末尾。
-
-工具可以通过 `maxResultChars` 自定义上限。注意这是按 JavaScript 字符数截断，不是精确 Token。
-
-## 2.8 Profile、Role 与 Active Tools
-
-工具是否发送给模型由 `getActiveTools()` 决定，依次检查：
-
-1. 工具 Profile 是否包含当前 Profile；
-2. 延迟工具是否已经发现；
-3. 当前 Role 是否允许使用。
-
-因此“已注册”不等于“本轮模型可见”。调试工具缺失时，应先检查活动 Profile、角色和延迟发现状态。
-
-## 2.9 为什么需要 Tool Search
-
-每个工具定义都占用输入上下文。工具少时可以全部发送，工具很多时会出现：
-
-- Schema 消耗大量 Token；
-- 相似描述让模型选不准；
-- 每轮都为用不到的能力付费。
-
-延迟工具设置：
-
-```ts
-shouldDefer: true,
-searchHint: 'github issues repositories ...'
-```
-
-系统 Prompt 只列出简短提示。模型先调用 `tool_search({ query: "完整工具名" })`，Registry 把工具加入 `discoveredTools`。下一 Step 的 `toAISDKFormat()` 才会暴露完整定义。
-
-当前 `searchTools()` 实际按精确名称或逗号分隔名称查找，并不是语义搜索。`searchHint` 只用于 Prompt 展示。文档和工具名应对此说清楚。
-
-## 2.10 MCP 接入
-
-`registerMCPServer()` 的过程：
-
-1. `client.connect()`；
-2. `client.listTools()` 获取远程工具；
-3. 给名称加 `mcp__<server>__` 前缀；
-4. 把 MCP inputSchema 原样作为参数 Schema；
-5. `execute` 委托给 `client.callTool()`；
-6. 默认标记为只读、并发安全、延迟工具。
-
-仓库定义了真实进程型 `MCPClient`，但 `main.ts` 当前连接的是 `MockMCPClient`。所以内置 GitHub MCP 不会访问真实仓库。
-
-## 2.11 Hook 在执行链中的位置
-
-工具执行的顺序是：
-
-```text
-Bash 风险分类
-  ↓
-Pre Hooks：allow / block / modify input
-  ↓
-获取并发或独占锁
-  ↓
-execute
-  ↓
-结果转字符串并截断
-  ↓
-Post Hooks：modify output
-  ↓
-释放锁
-```
-
-当前主程序注册了：
-
-- `audit-log`：文件写操作前打印路径，但不会阻止；
-- `bash-timestamp`：给 Bash 输出加 ISO 时间戳。
-
-## 2.12 如何增加一个工具
-
-以只读的项目统计工具为例：
-
-```ts
-export const countFilesTool: ToolDefinition = {
-  name: 'count_files',
-  description: '统计指定目录中的文件数量',
-  parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: '目标目录' },
-    },
-    required: ['path'],
-    additionalProperties: false,
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  execute: async ({ path }) => {
-    // 实现统计逻辑
-    return { path, count: 0 };
-  },
-};
-```
-
-然后在 `src/tools/index.ts` 导入并加入 `allTools`。设计工具时注意：
-
-- 名称稳定、短且语义明确；
-- 描述说明何时使用，不只重复名称；
-- 参数 Schema 尽量严格；
-- 输出保持结构化和精简；
-- 明确是否只读、是否并发安全；
-- 写操作考虑幂等、权限和审计；
-- 错误应作为可理解结果或明确异常，不要静默失败。
-
-## 2.13 实践
-
-在 Mock 模式输入：
+启动 `pnpm start` 后，依次输入下面几条（**注意：`mock-model.ts` 对并行、搜索和 glob 只认固定触发词**）：
 
 ```text
 读取 package.json
-搜索 src 目录下包含 agentLoop 的文件
-列出所有 TypeScript 文件
-同时查询北京天气和计算 12 * 8
+测试搜索
+测试glob
+测试并发
 ```
 
-观察只读工具是否可能并行，写工具为什么默认独占。再输入 `/role guest` 后重复尝试，观察活动工具变化。
+输入 `测试并发` 时仔细看终端日志：Mock 会一口气吐出两个 `get_weather` 和一个 `list_directory`，观察它们是如何触发并发安全路径的；再输入 `/role guest` 后重新输入 `测试bash`，看看工具不在可见集合时会发生什么（测完记得 `/role owner` 切回来）。
 
-## 2.14 本章自检
+## 2.13 本章自检
 
-1. 工具已注册但模型看不见，可能有哪些原因？
-2. `isReadOnly` 与 `isConcurrencySafe` 是否是同一个概念？
-3. 为什么工具结果也需要截断？
-4. Tool Search 当前是语义搜索吗？
-5. MCP 工具和本地工具进入 Agent Loop 后有什么共同点？
+1. 工具已经在 `allTools` 里注册了，为什么本轮模型还是看不见它？
+2. `isReadOnly` 和 `isConcurrencySafe` 是一回事吗？为什么分开？
+3. 为什么截断工具输出时要“保留前 60% 和后 40%”，而不是直接截前 3000 字？
+4. 当前的 `tool_search` 支持拿自然语言模糊搜工具吗？
+5. Hook Pipeline、权限控制和并发锁，为什么全部写在 `ToolRegistry` 里，而不是让每个工具自己写？
+
+<details>
+<summary>参考思路（点击展开）</summary>
+
+1. 可能被 `getActiveTools()` 的任意一道过滤掉了：当前 `activeProfile` 不在工具的 `profile` 里；设置了 `shouldDefer: true` 且尚未被 `tool_search` 发现；或者当前 `Role`（如 `guest`）无权访问。
+2. 不是一回事。大多数只读工具同时也是并发安全的，但有些只读操作可能依赖共享状态/限流器而不宜并发；分开标可以让安全治理和锁调度解耦。
+3. 文件开头的导出/声明很重要，但错误堆栈、执行结论和汇总往往落在文件末尾，保头保尾比单纯截断开头更容易保留有效线索。
+4. 不支持。`searchTools()` 源码里直接按 `this.tools.get(name)` 精确查表（支持逗号分隔多个名字）。
+5. 把横切关注点收口在注册表统一包装，新工具作者只需要关心输入输出本身，不容易因为某个人忘写鉴权或忘加锁而在整个系统里撕开口子。
+
+</details>

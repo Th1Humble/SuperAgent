@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 490" width="100%" height="auto" role="img" aria-label="Agent 四层纵深安全防御图">
+  <defs>
+    <style>
+      .font { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+    <marker id="arr-b6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#4169E1"/>
+    </marker>
+    <filter id="s6" x="-4%" y="-4%" width="108%" height="114%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#1C3152" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+
+  <rect x="1" y="1" width="1118" height="488" rx="16" fill="#F8FAFF" stroke="#E3E9F2" stroke-width="1.5"/>
+
+  <text x="40" y="42" class="font" font-size="22" font-weight="750" fill="#17243B">Agent 纵深防御：四道卡口层层兜底</text>
+  <text x="40" y="66" class="font" font-size="13" fill="#5D6A80">不能指望 System Prompt 一句“别删文件”保平安——任何单层防线都可能被绕过，需要多阶段配合</text>
+
+  <!-- Layer 1 -->
+  <g filter="url(#s6)">
+    <rect x="40" y="102" width="236" height="296" rx="14" fill="#FFFFFF" stroke="#4169E1" stroke-width="2"/>
+    <rect x="58" y="118" width="94" height="22" rx="11" fill="#EEF2FF"/>
+    <text x="105" y="133" text-anchor="middle" class="font" font-size="11" font-weight="700" fill="#3158C9">1. 请求发出前</text>
+    <text x="58" y="164" class="font" font-size="15" font-weight="750" fill="#17243B">RBAC 角色可见性</text>
+    <text x="58" y="184" class="mono" font-size="11" fill="#64748B">src/security/roles.ts</text>
+
+    <rect x="58" y="202" width="200" height="44" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="70" y="221" class="mono" font-size="12" font-weight="700" fill="#17243B">owner</text>
+    <text x="70" y="238" class="font" font-size="11.5" fill="#64748B">放行所有已激活工具</text>
+
+    <rect x="58" y="254" width="200" height="44" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="70" y="273" class="mono" font-size="12" font-weight="700" fill="#3158C9">collaborator</text>
+    <text x="70" y="290" class="font" font-size="11.5" fill="#64748B">排除 bash 以外的工具</text>
+
+    <rect x="58" y="306" width="200" height="44" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="70" y="325" class="mono" font-size="12" font-weight="700" fill="#0F766E">guest</text>
+    <text x="70" y="342" class="font" font-size="11.5" fill="#64748B">仅 7 个只读/基础工具</text>
+
+    <text x="58" y="378" class="font" font-size="11" fill="#64748B">效果：无权工具根本不进 Schema</text>
+  </g>
+
+  <line x1="276" y1="250" x2="300" y2="250" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b6)"/>
+
+  <!-- Layer 2 -->
+  <g filter="url(#s6)">
+    <rect x="306" y="102" width="236" height="296" rx="14" fill="#FFFFFF" stroke="#D97706" stroke-width="2"/>
+    <rect x="324" y="118" width="94" height="22" rx="11" fill="#FEF3C7"/>
+    <text x="371" y="133" text-anchor="middle" class="font" font-size="11" font-weight="700" fill="#B45309">2. 工具执行前</text>
+    <text x="324" y="164" class="font" font-size="15" font-weight="750" fill="#17243B">Bash 分级 + Pre Hook</text>
+    <text x="324" y="184" class="mono" font-size="11" fill="#64748B">bash-classifier &amp; hooks.ts</text>
+
+    <rect x="324" y="202" width="200" height="58" rx="8" fill="#FEF2F2" stroke="#FECACA"/>
+    <text x="336" y="222" class="font" font-size="12" font-weight="700" fill="#991B1B">dangerous（直接拒绝）</text>
+    <text x="336" y="241" class="mono" font-size="11" fill="#B91C1C">rm -rf / sudo / mkfs / |sh</text>
+
+    <rect x="324" y="268" width="200" height="44" rx="8" fill="#FFFBEB" stroke="#FDE68A"/>
+    <text x="336" y="287" class="font" font-size="12" font-weight="700" fill="#B45309">moderate（警告后放行）</text>
+    <text x="336" y="304" class="mono" font-size="11" fill="#92400E">rm / mv / chmod / git push</text>
+
+    <rect x="324" y="320" width="200" height="46" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="336" y="339" class="font" font-size="12" font-weight="700" fill="#17243B">Pre Hook（如 audit-log）</text>
+    <text x="336" y="356" class="font" font-size="11" fill="#64748B">支持 block；异常 fail-open</text>
+
+    <text x="324" y="384" class="font" font-size="11" fill="#B45309">注：正则防手滑，非系统沙箱</text>
+  </g>
+
+  <line x1="542" y1="250" x2="566" y2="250" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b6)"/>
+
+  <!-- Layer 3 -->
+  <g filter="url(#s6)">
+    <rect x="572" y="102" width="236" height="296" rx="14" fill="#FFFFFF" stroke="#3158C9" stroke-width="2"/>
+    <rect x="590" y="118" width="94" height="22" rx="11" fill="#EEF2FF"/>
+    <text x="637" y="133" text-anchor="middle" class="font" font-size="11" font-weight="700" fill="#3158C9">3. 工具执行中</text>
+    <text x="590" y="164" class="font" font-size="15" font-weight="750" fill="#17243B">并发锁与资源上限</text>
+    <text x="590" y="184" class="mono" font-size="11" fill="#64748B">registry.ts &amp; agent/loop.ts</text>
+
+    <rect x="590" y="202" width="200" height="48" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="602" y="222" class="font" font-size="12" font-weight="700" fill="#17243B">读写锁（防写竞争）</text>
+    <text x="602" y="240" class="font" font-size="11" fill="#64748B">只读并发，写工具独占串行</text>
+
+    <rect x="590" y="258" width="200" height="48" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="602" y="278" class="font" font-size="12" font-weight="700" fill="#17243B">超时控制</text>
+    <text x="602" y="296" class="font" font-size="11" fill="#64748B">bash 10s / Sub-Agent Abort</text>
+
+    <rect x="590" y="314" width="200" height="48" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="602" y="334" class="font" font-size="12" font-weight="700" fill="#17243B">循环刹车上限</text>
+    <text x="602" y="352" class="font" font-size="11" fill="#64748B">30 步 · 200k Token · 死循环熔断</text>
+
+    <text x="590" y="384" class="font" font-size="11" fill="#64748B">注：Sub-Agent 会绕开锁和 Hook</text>
+  </g>
+
+  <line x1="808" y1="250" x2="832" y2="250" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-b6)"/>
+
+  <!-- Layer 4 -->
+  <g filter="url(#s6)">
+    <rect x="838" y="102" width="242" height="296" rx="14" fill="#FFFFFF" stroke="#0D9488" stroke-width="2"/>
+    <rect x="856" y="118" width="94" height="22" rx="11" fill="#F0FDFA"/>
+    <text x="903" y="133" text-anchor="middle" class="font" font-size="11" font-weight="700" fill="#0F766E">4. 工具执行后</text>
+    <text x="856" y="164" class="font" font-size="15" font-weight="750" fill="#17243B">结果治理与留痕</text>
+    <text x="856" y="184" class="mono" font-size="11" fill="#64748B">hooks.ts &amp; trace/recorder.ts</text>
+
+    <rect x="856" y="202" width="206" height="48" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="868" y="222" class="font" font-size="12" font-weight="700" fill="#17243B">3000 字符头尾截断</text>
+    <text x="868" y="240" class="font" font-size="11" fill="#64748B">保留前 60% + 后 40% 防爆窗</text>
+
+    <rect x="856" y="258" width="206" height="48" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="868" y="278" class="font" font-size="12" font-weight="700" fill="#17243B">Post Hook 改写输出</text>
+    <text x="868" y="296" class="font" font-size="11" fill="#64748B">如 bash-timestamp 加时间戳</text>
+
+    <rect x="856" y="314" width="206" height="48" rx="8" fill="#F8FAFC" stroke="#E2E8F0"/>
+    <text x="868" y="334" class="font" font-size="12" font-weight="700" fill="#17243B">Trace 与 Cron 日志</text>
+    <text x="868" y="352" class="font" font-size="11" fill="#64748B">字段名自动脱敏 [REDACTED]</text>
+
+    <text x="856" y="384" class="font" font-size="11" fill="#0F766E">出问题后支持 trace:inspect 复盘</text>
+  </g>
+
+  <!-- Bottom Note -->
+  <rect x="40" y="420" width="1040" height="44" rx="10" fill="#FFFFFF" stroke="#CBD5E1" stroke-dasharray="5 3"/>
+  <text x="560" y="447" text-anchor="middle" class="font" font-size="12.5" font-weight="600" fill="#475569">
+    当前教学版边界：无工作区根目录沙箱、Dashboard 无登录鉴权、Hook 异常默认放行（生产需改为沙箱 + 人工审批 + fail-closed）
+  </text>
+</svg>

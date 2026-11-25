@@ -1,222 +1,147 @@
-# 03. 上下文工程：让有限窗口装下最有用的信息
+# 03. 上下文工程：有限窗口里的精打细算
 
-## 3.1 上下文不只是聊天记录
+很多人刚学 Agent 时觉得“只要模型支持 128k 甚至 1M 上下文，全往里塞就行”。实际一跑就会发现：塞得越多，延迟越高、账单越贵，而且模型越容易被几千行过时输出带偏注意力。这一章看 SuperAgent 怎么管住发给模型的每一段信息。
 
-一次模型请求的上下文至少包括：
+## 3.1 发给模型的上下文里到底有什么
 
-```text
-System Prompt
-  ├─ 核心规则
-  ├─ 工具使用指南
-  ├─ 延迟工具摘要
-  ├─ 长期记忆索引
-  ├─ RAG 状态
-  ├─ 激活的 Skill
-  └─ Session 信息
+每次调用 `streamText()` 时，模型收到的绝不只是一句聊天记录，而是三大块拼出来的现场（点击图片可放大）：
 
-Tool Schemas
-Conversation Messages
-  ├─ 用户与助手文本
-  ├─ tool-call
-  └─ tool-result
-```
+![每次调用 streamText 时的上下文窗口构成](./assets/03-context-anatomy.svg)
 
-上下文工程的目标不是“塞得越多越好”，而是在有限窗口里保留最能帮助下一步决策的信息。
+## 3.2 `PromptBuilder`：像流水线一样拼 System Prompt
 
-## 3.2 PromptBuilder：用管道组装 System Prompt
-
-`PromptBuilder` 保存一组有顺序的 Pipe：
+不要把几百行 System Prompt 写死在一个大字符串模板里。`src/context/prompt-builder.ts` 用了一个管道模式，在 `src/main.ts` 里按顺序挂了 7 段：
 
 ```ts
-builder
+const builder = new PromptBuilder()
   .pipe('coreRules', coreRules())
   .pipe('toolGuide', toolGuide())
   .pipe('deferredTools', deferredTools())
   .pipe('memoryContext', memoryContext(memoryStore))
   .pipe('ragContext', ragContext(vectorStore))
-  .pipe('skillContext', ...)
+  .pipe('skillContext', () => skillLoader.buildPromptSection(activeSkills))
   .pipe('sessionContext', sessionContext());
 ```
 
-每个 Pipe 接收 `PromptContext`，返回字符串或 `null`。`build()` 按顺序执行并以空行连接。
+每一段就是一个小函数：接收 `PromptContext`，返回字符串或 `null`（没内容就跳过），最后用空行拼起来。这样做的好处很现实：哪一段不需要可以随时摘掉、每段可以单独写测试，而且哪天加了个新模块直接 `.pipe()` 塞进来就行。
 
-这种设计比一个巨型模板更容易：
+> **顺带看清一个占位细节**：`main.ts` 里的 `makePromptCtx()` 第 189 行目前写死了 `sessionMessageCount: 0`，所以 System Prompt 里打印的会话消息条数目前一直显示为 0，没有取真实的 `messages.length`。
 
-- 单独启停某一段；
-- 保持顺序稳定；
-- 注入依赖；
-- 测试每段输出；
-- 让 Plugin 或后续功能增加新段落。
+## 3.3 稳定前缀与 Prompt Cache（省钱的关键技巧）
 
-`PromptContext` 当前包含工具数量、延迟工具摘要、会话消息数和 Session ID。值得注意的是，`makePromptCtx()` 目前把 `sessionMessageCount` 固定为 0，因此该字段没有反映真实对话长度。
+主流模型供应商（包括 Qwen、Claude、OpenAI）都支持 **Prompt Cache**：如果这次请求开头那一大段内容跟上次一模一样，供应商会直接复用缓存里的中间计算状态，输入单价大幅打折、首字延迟也更低。
 
-## 3.3 稳定前缀与缓存
-
-System Prompt 前部越稳定，越有机会命中模型供应商的 Prompt Cache。管道顺序应遵循：
+所以 `PromptBuilder` 排管道顺序有个黄金法则——**越稳定的放越前面，越容易变的放越后面**：
 
 ```text
-稳定规则 → 稳定工具说明 → 半动态知识 → 高频变化的会话信息
+[前部] 固定规则 → 工具指南 → 半动态的记忆/RAG摘要 → 每轮可能变的 Skill / Session [后部]
 ```
 
-如果把时间戳、随机数或每轮变化的统计放在最前面，可能导致后续大段内容无法复用缓存。当前项目展示了 Cache usage 和费用，但没有为不同供应商实现显式 cache_control 策略。
+千万别把 `new Date().toISOString()`（精确到秒的当前时间）或随机数直接贴在 System Prompt 最顶部！否则每一轮前缀哈希都会变，后面的缓存全作废。你可以在 `src/mock-model.ts` 里看到项目专门用前缀哈希模拟了 `cache write` 和 `cache hit`，直观感受前缀变化对费用的影响（还可以用 `/cache off` 和 `/cache on` 对比开关效果）。
 
-## 3.4 Session 持久化
+## 3.4 Session 持久化：JSONL 为什么好用，以及当前缺了哪半截
 
-`SessionStore` 把每条消息写成一行 JSON：
+`src/session/store.ts` 把对话历史保存在 `.sessions/<sessionId>.jsonl`。
 
-```json
-{"type":"message","timestamp":"...","message":{"role":"user","content":"你好"}}
-```
+**JSONL**（JSON Lines）就是“每一行是一个独立 JSON 对象”的纯文本格式。对日志和对话记录来说，它比一整个大 JSON 数组好用太多：
+- 新来一条消息只需 `appendFile` 往文件末尾追加一行，不用把整份历史读出来重新序列化；
+- 万一进程崩溃写坏了最后一行，读取时按行 `JSON.parse` 跳过坏行就行，前面几百轮数据照样完好；
+- 终端里直接 `tail -n 20` 就能看最新消息。
 
-JSONL 的优点：
+**但一定要注意仓库现状**：`SessionStore.load()` 方法已经写好了，不过 `src/main.ts` 每次启动依然是 `let messages: ModelMessage[] = []`——也就是说**目前只管写、不管读**，哪怕跑 `pnpm run continue` 也不会把上次聊的恢复回来（第 08 章的实验 9 就是专门带你把这半截接上的）。
 
-- 追加写简单；
-- 单行损坏时可以跳过；
-- 大文件可以流式处理；
-- 便于命令行检查。
+## 3.5 上下文是怎么一步步膨胀失控的
 
-当前路径固定为 `.sessions/<sessionId>.jsonl`。`load()` 已经实现并会忽略格式错误行，但主启动流程始终从 `messages = []` 开始，`pnpm run continue` 也没有读取历史。因此当前是“持久化已写、恢复未接通”。
+实际跑十来轮任务后，占大头的往往不是你和模型打的那几句文字，而是：
+1. 调 `read_file`、`grep`、`web_fetch` 留下的一长串 `tool-result`；
+2. 模型执行多步循环时产生的中间思考和参数；
+3. 工具越来越多之后塞进来的大量 Tool Schema。
 
-## 3.5 为什么上下文会膨胀
+为了压住膨胀，项目里准备了两套工具模块——不过在看代码前先记住一句话：**它们都已经实现了，但默认主循环还没有自动调用**。
 
-常见增长来源：
+## 3.6 两种压缩思路：`Microcompact` vs `LLM 摘要`
 
-- 用户和助手多轮文本；
-- 读取大文件产生的 tool-result；
-- 搜索和网页抓取结果；
-- 相同系统信息重复出现；
-- 多步 Agent Loop 产生大量结构化消息；
-- 工具 Schema 数量增加。
+都在 `src/context/compressor.ts` 里：
 
-如果不治理，会导致费用上升、延迟增加、超过窗口或模型注意力被噪声分散。
+1. **Microcompact（机械清理，零额外模型费用）**
+   - 思路：最近几轮的工具结果通常还要用，保留；更早之前的旧 `tool-result`（比如 10 轮前读过的某个大文件内容）直接替换成一条简短占位符（如 `[已清理较早的工具输出]`）。
+   - 适用场景：那些“真要再用随时能再调工具重读一遍”的观察结果。坏处是没有语义判断，万一早期读过一份关键报错后面还要引用，会被清掉。
 
-## 3.6 Microcompact
+2. **LLM Summarize（大模型摘要压缩）**
+   - 思路：保留最近 6 条消息不动，把更早的对话序列化之后发给模型，按固定模板总结成“用户目标、已做操作、关键发现、遗留问题”。
+   - 风险：摘要模型可能漏掉某个精确文件路径或报错码；原有 `tool-call` / `tool-result` 的结构关系也会在总结后消失；反复摘要多次还会像复印机一样逐渐失真。
 
-`microcompact()` 是不调用模型的机械压缩：
+## 3.7 三层即时防线（`src/context/defense.ts`）
 
-- 保留最近若干工具结果；
-- 对较早且可清理的工具结果替换成简短占位；
-- 返回清理后的消息和节省 Token 估计。
+除了调用大模型做摘要，项目在 `src/context/defense.ts` 写了一套无需模型、毫秒级执行的三层清理器（也是全仓库唯一写了正式单元测试 `src/context/defense.spec.ts` 的模块）：
 
-优点是快、可预测、无额外模型费用；缺点是不能理解语义。如果早期工具结果中包含后续仍需要的关键数据，机械清理可能丢失信息。
+- **截断超长历史结果**（`truncateToolResults`）：注意它和第 02 章 `ToolRegistry` 截断分工不同——Registry 管的是“工具刚跑完那一刻”，Defense 管的是“历史数组里已经攒了一堆老工具结果，再收紧一次”；
+- **TTL Prune（按过期时间修剪）**：根据 `timestamps` 记录的消息时间，把太久以前的旧输出先软修剪、再硬清除；
+- **`TokenTracker`**：拿 API 返回的真实 Token 作为基线，再用字符数变化推算增量，比每次全量遍历更准。
 
-适合优先清理的通常是可重新获取的观察结果，而不是用户约束、最终决策或无法重现的外部信息。
+目前这些被打包在 `applyDefense()` 里，终端里手动输入 `defend`（或 `执行防线`）就能触发一次，查看前后对比。
 
-## 3.7 LLM 摘要压缩
+## 3.8 `/context` 矩阵与 `/usage` 账单怎么看
 
-`summarize()` 在消息超过阈值时：
+项目模仿 Claude Code 做了一个很直观的终端工具 `src/context/view.ts`：
 
-1. 保留最近 6 条消息；
-2. 把更早消息序列化；
-3. 用模型根据固定 Prompt 生成结构化摘要；
-4. 用一条摘要消息替换旧历史；
-5. 返回压缩前后 Token 估计。
+输入 `/context` 后，程序会把 100 万假想窗口切成 16×16 共 256 个小方块，用不同颜色标出 System Prompt、System tools、Memory、Messages 各自占了几格。
 
-摘要要求保留目标、已完成工作、关键决策、文件变更、错误、下一步和用户偏好。这比普通“总结一下”更适合 Agent 接续任务。
+> **看源码才注意到的两个小细节**（`src/commands/context.ts`）：
+> 1. `skillsChars` 目前硬编码成了 `0`，所以就算加载了 Skill，右侧图例也不会单列 `Skills` 一行，它的长度实际上算进了 `System prompt` 那一格里；
+> 2. 顶部显示的模型名字只判断了环境变量 `process.env.DASHSCOPE_API_KEY`，写死了 `Qwen Plus` / `Mock Model`，不随配置文件里的 `model.name` 改变。
 
-风险包括：
+而 `/usage` 读取的则是 `src/usage/tracker.ts` 累加的结果，用来看缓存命中率 bar 和“如果没有缓存得多花多少钱”。记住主程序里 `.usage/today.jsonl` 路径是硬编码的（没读取配置里的 `usage.trackingFile`），且这只是一个字符/Token 估算观察面板（不同语言和 JSON 的换算比例不同）。
 
-- 摘要模型可能遗漏细节；
-- 旧 tool-call 与 tool-result 的结构关系会消失；
-- 每次再次压缩摘要会产生信息衰减；
-- 压缩本身也消耗 Token。
+## 3.9 一套接地气的上下文治理顺序
 
-当前 `summarize()` 和 `microcompact()` 已实现，但主 Agent Loop 没有自动调用它们。它们属于课程能力和可复用模块，不是当前默认运行路径。
+如果以后你自己从头搭一个 Agent，按开销从低到高排优先级最划算：
 
-## 3.8 三层即时防线
+1. **源头限流**：工具刚返回时就截断超长输出（`ToolRegistry`）；
+2. **工具瘦身**：不常用的大工具走 `shouldDefer` 延迟发现；
+3. **机械清理**：把陈旧的可重取工具结果清掉（`microcompact` / `TTL`）；
+4. **模型摘要**：实在聊太长了再用 LLM 压缩早期历史（`summarize`）；
+5. **开新会话**：把总结好的稳定结论写进 `.memory/`，然后干脆清空 `messages` 重新开一局。
 
-`src/context/defense.ts` 提供无需模型的即时治理。
+## 3.10 动手试一试（看前后数字变化）
 
-### 工具结果截断
-
-`truncateToolResults()` 遍历结构化 tool-result，对超过上限的文本保留头尾。它与 Registry 执行后的 `truncateResult()` 处于不同层：
-
-- Registry 截断：结果刚产生时；
-- Context Defense 截断：历史消息已经存在时再次治理。
-
-### TTL Prune
-
-`ttlPrune()` 根据消息时间和角色清理过旧内容。它依赖 `timestamps: Map<number, number>`，索引必须与消息数组保持一致。
-
-### TokenTracker
-
-TokenTracker 可以接受 API 提供的精确基线，再对新增或被替换消息做字符估算增减，避免每次从零估计。
-
-### Apply Defense
-
-`applyDefense()` 组合截断与 TTL，并给出前后 Token 估算和删除数量。当前主要通过 `defend`（或“执行防线”）调试命令手动触发，没有在每次 Agent Loop 前自动执行。
-
-## 3.9 上下文可视化
-
-`src/context/view.ts` 将上下文拆成多个 Slice，例如 System、Tools、Memory、RAG、Messages 和可用空间，生成终端矩阵与图例。
-
-`/context` 会：
-
-1. 重新构造 System Prompt；
-2. 统计 Memory、RAG、工具 Schema 和消息字符；
-3. 使用字符/token 比估算；
-4. 渲染各部分占比。
-
-这是一种诊断估算，不等价于特定模型 tokenizer 的精确结果。中文、代码和结构化 JSON 的换算比例不同。
-
-## 3.10 Usage 与费用
-
-`UsageTracker` 保存每个 Step：
-
-- 时间；
-- 模型名；
-- 四类 Token；
-- 估算费用。
-
-记录会追加到 `.usage/today.jsonl`。`totals()` 还能计算缓存命中率、没有缓存时的假想成本和节省额。
-
-当前主程序创建 Tracker 时硬编码 `.usage/today.jsonl`，没有使用 `config.usage.trackingFile`。价格表也只是代码内静态值。学习时应把它看作成本观测模式，而不是财务账单。
-
-## 3.11 Memory/RAG 如何进入 Prompt
-
-`memoryContext(memoryStore)` 调用 `buildPromptSection()`，主要注入记忆索引和使用原则，不会把每条完整记忆全部放入 System Prompt。需要详情时模型再调用 `memory read/search`。
-
-`ragContext(vectorStore)` 当前只注入知识库片段数量和使用提示，不会根据本轮用户问题自动检索并把结果放进 Prompt。检索由模型主动调用 `rag_search` 工具完成。
-
-这是“Agentic RAG”：模型决定何时检索，而不是每个请求都强制召回。
-
-## 3.12 上下文治理的推荐顺序
-
-实践中可以按成本从低到高治理：
-
-```text
-1. 控制工具输出长度
-2. 延迟加载不常用 Tool Schema
-3. 删除可重取的旧工具结果
-4. TTL 清理明显过期内容
-5. 对早期对话做 LLM 摘要
-6. 必要时开启新 Session，并把关键决策写入 Memory
-```
-
-## 3.13 实践
-
-在终端进行几轮文件读取和问答，然后运行：
+启动 `pnpm start` 后，直接用内置的调试命令造一波“假长对话”，感受上下文防线是怎么省 Token 的：
 
 ```text
 /context
-/usage
+sim
+/context
 defend
 /context
+/usage
 ```
 
-比较防御前后的 Messages 占用。随后查看：
+你会看到终端打出一张类似下面的对比（以实际输出为准）：
 
 ```text
-.sessions/default.jsonl
-.usage/today.jsonl
+--- 执行三层防线 ---
+  [Layer 2] 截断: ... 条, 预算清理: ... 条
+  [Layer 3] 软修剪: ..., 硬清除: ...
+  [结果] ~xxxx → ~yyyy tokens (节省 zzzz)
 ```
 
-注意不要把包含敏感上下文的文件直接分享出去。
+再去项目根目录下看看刚才自动生成的 `.sessions/default.jsonl` 和 `.usage/today.jsonl` 里面到底存了什么。
 
-## 3.14 本章自检
+## 3.11 本章自检
 
-1. System Prompt、Tool Schema 和 Messages 为什么要分别统计？
-2. Registry 截断与 Context Defense 截断处于什么不同阶段？
-3. Microcompact 和 LLM 摘要的优缺点分别是什么？
-4. 当前项目的压缩是否自动接入 Agent Loop？
-5. Memory 索引为何适合常驻 Prompt，而完整记忆不适合？
+1. System Prompt 里的各段顺序如果随便打乱（比如把动态时间放第一行），会破坏什么能力？
+2. `ToolRegistry` 里的 `truncateResult` 和 `defense.ts` 里的 `truncateToolResults` 分别在什么时候起作用？
+3. 为什么项目要用 `.jsonl` 而不是单个 `.json` 数组存 Session 历史？
+4. 为什么代码里写好了 `microcompact()` 和 `summarize()`，但目前执行 `sim` 时不会自动压缩？
+5. 为什么 Memory 是只放“索引”进 System Prompt，而不是把所有记忆全文塞进去？
+
+<details>
+<summary>参考思路（点击展开）</summary>
+
+1. 会破坏供应商的 Prompt Cache 命中率。只要开头的字节变了，后面所有本该复用的前缀都要重新计算并按全价计费。
+2. 前者在工具刚执行完返回结果的那一刻立刻生效，防止单次结果过大；后者在历史消息积压过多时对已经存在 `messages` 数组里的旧工具结果做二次压缩。
+3. JSONL 可以直接向文件尾部追加一行，无需每次整份读取再重写；某一行意外损坏也不会导致整个历史文件解析失败。
+4. 目前 `agentLoop()` 尚未把 `compressor.ts` 接进自动触发逻辑里，当前必须通过 `defend` 命令手动触发 `applyDefense()`（或自己接进主循环）。
+5. 长期记忆会随时间不断增多，全部塞进 System Prompt 会持续占用每轮请求的基础 Token；只放轻量的 `MEMORY.md` 目录索引，等模型真正需要时再去调 `memory read/search` 按需读取，最省窗口。
+
+</details>

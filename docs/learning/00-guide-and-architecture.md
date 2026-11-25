@@ -1,187 +1,138 @@
 # 00. 阅读指南与整体架构
 
-## 0.1 项目是什么
+读源码最怕一上来就扎进细节里迷路。这一章先不看任何具体算法，只做三件事：搞清 SuperAgent 到底是个什么东西、看懂它的模块地图、跟着一条终端消息从输入到输出走完一圈。
 
-SuperAgent 是一个以 TypeScript 编写的本地 AI Agent 教学项目。它不是一个网页聊天壳，而是一个小型 Agent Runtime：模型只是其中一个部件，系统还负责工具执行、上下文组装、知识检索、长期记忆、安全控制、任务调度、消息接入和运行记录。
+## 0.1 SuperAgent 是什么
 
-它的核心价值不在某个模型有多强，而在于展示了一个 Agent 系统的基本骨架：
+平时在网页上用的聊天机器人，流程基本是单向的：**你发一句 → 模型回一句**。
+
+SuperAgent 是一个本地运行的 **Agent Runtime（智能体运行时）**。在这里，大语言模型只是“大脑”，真正让它能读写文件、查资料、跑命令的，是外围包着的那一整套工程壳子：
 
 ```text
-输入 → 组装上下文 → 调用模型 → 解析事件 → 执行工具
- ↑                                            ↓
- └──────────── 把结果写回消息，再次调用模型 ────┘
+用户输入 → 组装上下文 → 调用模型 → 解析模型输出 → (如果模型要求调工具) 本地执行工具
+   ↑                                                                │
+   └──────────────────────── 把工具执行结果塞回历史，再次问模型 ─────────┘
 ```
 
-当模型不再请求工具并给出最终文本时，本轮才结束。
+只要模型还在“要工具”，这个循环就继续转；直到模型觉得信息够了、不再请求工具、直接输出回答文本，这一轮交互才算结束。
 
-## 0.2 技术栈
+## 0.2 技术栈与几个高频词
 
-| 技术 | 在项目中的作用 |
-| --- | --- |
-| TypeScript + ESM | 类型约束与模块组织 |
-| Node.js 22 | 文件、进程、网络、终端和定时器运行环境 |
-| `tsx` | 直接运行 TypeScript，不要求预先构建 |
-| Vercel AI SDK | 统一模型调用、流式事件和工具协议 |
-| `@ai-sdk/openai` | 连接 OpenAI 兼容协议；本项目用于 DashScope |
-| Zod | 配置结构校验和默认值填充 |
-| Hono | Dashboard HTTP 服务 |
-| 飞书 Node SDK | Bot 长连接与消息收发 |
-| Croner | Cron 表达式解析和下次执行时间计算 |
-| Turndown | 把网页 HTML 转成 Markdown |
+项目总共依赖十来个包，全部围绕“用最少代码跑通 Agent”来选：
 
-项目没有正式 build 脚本，`pnpm start` 通过 `tsx src/index.ts` 直接执行源码。
+| 技术 | 在项目里的角色 | 顺带解释给新手 |
+| --- | --- | --- |
+| TypeScript + ESM | 源码语言与模块规范 | ESM 即 `import/export` 语法，注意 TS 里导入本地文件也要写 `.js` 后缀（如 `'./main.js'`），这是 Node ESM + TS 的常见约定 |
+| Node.js 22 + `tsx` | 运行环境 | `tsx` 能直接执行 `.ts` 文件，省去了先 `tsc` 编译再跑的 `build` 步骤 |
+| Vercel AI SDK (`ai`) | 统一模型与工具协议 | 抹平不同厂商的流式格式和工具调用格式，让业务代码不用重写 |
+| `@ai-sdk/openai` | 连接模型接口 | DashScope（通义千问）兼容 OpenAI 协议，所以直接复用这个适配器并替换 `baseURL` |
+| Zod | 配置校验 | 用来检查 `super-agent.config.json` 格式对不对、缺字段时自动填默认值 |
+| Hono | 轻量 HTTP 框架 | 用来起本地 3000 端口的 Channel Dashboard 网页 |
+| `@larksuiteoapi/node-sdk` | 飞书机器人 SDK | 建立飞书长连接，把飞书群/私聊消息接进来 |
+| Croner | 定时表达式解析 | 算清楚 `0 9 * * *` 下一次该什么时候触发 |
+| Turndown | HTML 转 Markdown | 抓取网页后把乱七八糟的 HTML 标签洗成模型更好读的 Markdown |
 
-## 0.3 顶层目录地图
+## 0.3 目录地图
+
+全仓库源码都在 `src/` 下，按职责拆成十几块，每块都只有两三个文件：
 
 ```text
 SuperAgent/
 ├── src/
-│   ├── agent/       主 Agent Loop、重试、循环检测
-│   ├── agents/      子 Agent 的记录、限制和执行
-│   ├── channels/    消息通道抽象、飞书和 Dashboard
-│   ├── commands/    终端斜杠命令
-│   ├── config/      Schema、配置加载、初始化向导
-│   ├── context/     Prompt、上下文压缩、防御和可视化
-│   ├── cron/        调度、解析、存储和执行日志
-│   ├── memory/      Markdown 长期记忆与 BM25 搜索
-│   ├── plugins/     插件生命周期与 Supabase 示例
-│   ├── rag/         切片、Embedding、向量库与混合检索
-│   ├── security/    角色权限、Hook、Bash 风险识别
-│   ├── session/     对话 JSONL 持久化
-│   ├── skills/      项目 Skill 加载器
-│   ├── tools/       工具定义、注册表、MCP 和内置工具
-│   ├── trace/       每轮执行的结构化轨迹
-│   ├── usage/       Token 与费用统计
-│   ├── index.ts     进程入口
-│   ├── main.ts      系统组装入口
-│   └── mock-model.ts 无密钥时的模型模拟器
-├── .skills/         项目内 Skill
-├── docs/            RAG 演示文档与本学习手册
-├── example.env      环境变量模板
-└── package.json     依赖和运行脚本
+│   ├── index.ts         CLI 入口：判断是跑 init 还是正常启动
+│   ├── main.ts          总装配车间：把所有模块创建出来并串在一起
+│   ├── mock-model.ts    无 API Key 时的假模型（按关键词模拟流式输出和工具调用）
+│   ├── agent/           主 Agent Loop、错误重试、死循环检测
+│   ├── agents/          子 Agent 的状态记录与并行派发
+│   ├── tools/           ToolRegistry（注册/权限/锁/Hook/截断）、内置工具、MCP
+│   ├── context/         PromptBuilder 管道、压缩器、即时防线、/context 矩阵视图
+│   ├── session/         把对话按行写进 .sessions/*.jsonl
+│   ├── usage/           统计每步 Token 消耗与估算费用
+│   ├── memory/          .memory/ 下的 Markdown 长期记忆、BM25 搜索与体检
+│   ├── rag/             文档切片、Embedding、内存向量库、混合检索
+│   ├── skills/          从 .skills/ 加载技能文档并拼进 Prompt
+│   ├── plugins/         进程内插件生命周期与 Supabase 示例
+│   ├── channels/        通道网关、飞书接入、Dashboard HTTP 服务
+│   ├── security/        三档角色权限、Pre/Post Hook 管线、Bash 危险命令拦截
+│   ├── cron/            定时任务的解析、持久化与定时器调度
+│   ├── commands/        终端斜杠命令分发器和各领域命令
+│   ├── config/          Zod Schema、JSON 配置加载与交互式 init 向导
+│   └── trace/           把每一步发给模型的完整现场写进 .traces/*.jsonl
+├── .skills/             自带技能示例（code-review）
+├── docs/                RAG 演示文档（顶层）+ 本学习手册（learning/）
+├── example.env          环境变量模板
+└── package.json         依赖与启动脚本
 ```
 
-## 0.4 静态架构
+## 0.4 模块之间怎么连起来
 
-```text
-                           ┌───────────────────┐
- CLI readline ────────────▶│                   │
- 飞书 / Dashboard ────────▶│   输入适配层       │
- Cron ────────────────────▶│                   │
-                           └─────────┬─────────┘
-                                     │ user message
-                                     ▼
-┌──────────────┐            ┌───────────────────┐
-│ Memory Index │───────────▶│   PromptBuilder   │◀──────── Skill
-│ RAG Summary  │            └─────────┬─────────┘
-└──────────────┘                      │ system prompt
-                                     ▼
-                           ┌───────────────────┐
-                           │    Agent Loop     │◀──── Model
-                           └─────────┬─────────┘
-                                     │ tool call
-                                     ▼
-                           ┌───────────────────┐
-                           │   Tool Registry   │
-                           │ role/hook/lock/   │
-                           │ truncate/defer    │
-                           └─────────┬─────────┘
-                                     │
-          ┌───────────┬──────────────┼────────────┬────────────┐
-          ▼           ▼              ▼            ▼            ▼
-       File/Shell   RAG/Memory     MCP/Plugin    Cron       Sub-Agent
+如果把启动后的系统画成一张静态接线图，核心流向是这样的（点击图片可放大）：
 
-旁路记录：Session / Trace / Usage / Cron Logs
-```
+![SuperAgent 整体运行架构](./assets/00-architecture.svg)
 
-## 0.5 `main.ts` 为什么重要
+这里最核心的设计原则是**收敛**：不管消息是从终端打进来的、从飞书发过来的，还是定时任务半夜触发的，最终调用的都是同一套 `agentLoop()` 和 `ToolRegistry`。区别仅在于外围的记录（目前只有终端主交互接上了 Session 和 Trace）。
 
-`main.ts` 是 Composition Root，也就是“负责组装，而不是负责具体业务”的位置。它按以下顺序建立系统：
+## 0.5 为什么先读 `src/main.ts`
 
-1. 加载 `.env` 和 `super-agent.config.json`；
-2. 根据 `model.apiKey` 创建 Mock 或真实模型；
-3. 创建 `ToolRegistry`，注册内置工具和 `tool_search`；
-4. 初始化 Memory、RAG 和对应工具；
-5. 准备 MCP、Skill、Plugin、Hook；
-6. 创建 Cron 和 Sub-Agent；
-7. 建立 Prompt 管道；
-8. 建立 Channel Gateway 并注册飞书通道；
-9. 建立命令分发器；
-10. `startAgent()` 中连接 MCP、加载插件、启动 Channel 和 Cron；
-11. 自动导入 `docs/` 第一层 Markdown；
-12. 启动终端 `ask()` 循环。
+软件工程里常把 `main.ts` 这种文件叫 **Composition Root（组合根）**——听着吓人，其实就是**“整个项目的总装配车间”**。
 
-阅读其他模块时，如果不确定它从哪里被创建、谁把依赖传给它，就回到 `main.ts`。
+每个子模块（比如 `CronService`、`ToolRegistry`、`MemoryStore`）自己只干一件事，互相尽量不写死依赖；最后全在 `src/main.ts` 里被 `new` 出来，再像插积木一样互相传进去：
+
+1. 读 `.env` 和 `super-agent.config.json`；
+2. 看 `config.model.apiKey` 有没有值，决定创建 Mock 还是真实模型；
+3. 创建 `ToolRegistry`，先把内置工具和 `tool_search` 注册进去；
+4. 初始化 `MemoryStore`、`VectorStore`，把记忆工具和 RAG 工具注册进去；
+5. 准备好 Skill 加载器、插件管理器、Pre/Post Hook 管线；
+6. 创建 `CronService` 和 `SubAgentRegistry`，把对应的管理工具也挂进 `ToolRegistry`；
+7. 用 `PromptBuilder` 把各个信息源串联成 System Prompt 生成器；
+8. 建好 `ChannelGateway` 并挂上飞书/Dashboard；
+9. 把所有斜杠命令汇总给 `createDispatcher()`；
+10. 调用 `startAgent()`：连接 Mock MCP → 加载插件 → 启动 Channel → 启动 Cron → 导入 `docs/*.md` 到知识库 → 进入终端提问循环 `ask()`。
+
+以后你看任何模块晕头转向，不知道“这玩意是谁创建、什么时候启动、参数哪来的”，直接搜它在 `src/main.ts` 里的调用位置，一下就通了。
 
 ## 0.6 一条终端消息的完整生命周期
 
-用户在 `You:` 后输入普通文本时：
+当你在 `You:` 后面敲入一句普通的话（比如 `读取 package.json`）并回车，背后会经历以下流转（点击图片可放大）：
 
-```text
-readline 收到文本
-  ↓
-Command Dispatcher 尝试识别斜杠命令
-  ↓ 不是命令
-把 user message 写入内存 messages 和 .sessions/default.jsonl
-  ↓
-PromptBuilder 重新构造 system prompt
-  ↓
-LocalTraceRecorder 创建本轮 trace
-  ↓
-agentLoop 调用 streamText
-  ↓
-模型返回文本、tool-call、tool-result 等流事件
-  ↓
-AI SDK 通过 ToolRegistry 暴露的 execute 执行工具
-  ↓
-模型响应消息追加回 messages
-  ↓ 若调用过工具
-继续下一 Step，让模型观察结果并决定下一步
-  ↓ 若未调用工具
-结束；记录 Usage、Trace 和新增 Session 消息
-```
+![一条终端消息的完整生命周期](./assets/00-message-lifecycle.svg)
 
-这里有两个容易混淆的循环：
+新手很容易把两个循环搞混，一定要分清：
+- **`ask()`**：人与程序的**外部多轮对话循环**（你问一句，它忙完回你，再等你问下一句）。
+- **`agentLoop()`**：单次请求内部的**自主执行循环**（为了回答你这一句话，模型自己反复调工具、看结果、再调工具，直到得出答案）。
 
-- `ask()` 是人与程序的多轮终端交互循环；
-- `agentLoop()` 是一次用户请求内部的多步自主执行循环。
+## 0.7 把五花八门的状态分个类
 
-## 0.7 三类状态
+写 Agent 最容易乱的是“状态存哪儿、重启还在不在”。先把当前仓库里的状态按生命周期列清楚：
 
-理解 Agent 项目时，先区分状态的生命周期：
+| 状态 | 活多久 | 当前存在哪 | 进程退出会怎样 |
+| --- | --- | --- | --- |
+| 单次 Step 中间变量 | 一次模型调用 | `agentLoop` 局部变量、`.traces/` | 内存销毁，Trace 文件保留供复盘 |
+| 当前对话历史 | 本次 CLI 运行期 | `messages` 数组、`.sessions/default.jsonl` | **注意**：文件虽保留，但重启目前不会自动读回 |
+| 长期记忆 | 跨会话永久留存 | `.memory/*.md` + `MEMORY.md` | 下次启动重新读索引，记忆还在 |
+| RAG 向量索引 | 仅限当前进程 | 内存 `VectorStore` | 退出即清空，下次启动重新切分 `docs/*.md` |
+| 定时任务 | 配置持久 + 定时在内存 | `.cron/jobs.json` + Node 定时器 | 重启会重新加载，但关机期间错过的不会补跑 |
+| 子 Agent 记录 | 仅限当前进程 | `SubAgentRegistry` 内存 Map | 退出即清空 |
 
-| 状态 | 生命周期 | 当前存放位置 |
-| --- | --- | --- |
-| 单次 Step | 一次模型调用 | 局部变量、Trace |
-| 当前对话 | 当前进程中的多轮消息 | `messages` 数组、`.sessions/` |
-| 长期知识 | 跨会话保留 | `.memory/`、项目文档 |
-| 检索索引 | 当前进程 | 内存 `VectorStore` |
-| 定时任务 | 跨重启配置 + 当前进程定时器 | `.cron/` + `setTimeout` |
-| 子 Agent 记录 | 当前进程 | `SubAgentRegistry` 内存 Map |
+## 0.8 本章自检
 
-## 0.8 课程路径与最终源码
+合上上面内容，试着用自己的话回答这 5 个问题（点开可看参考思路）：
 
-课程采用“先最小实现，再逐层演化”的路线；最终仓库已经把多数能力拆成模块。两种视角都需要：
+1. `src/index.ts` 和 `src/main.ts` 为什么拆成两个文件？
+2. 为什么说 `main.ts` 是“装配车间”？它和业务模块怎么分工？
+3. `ask()` 和 `agentLoop()` 各自负责哪一层的循环？
+4. 为什么重启后记忆（Memory）还在，但聊过的对话（Session）和 RAG 索引却没了？
+5. 飞书发来的消息和终端输入的消息，是在哪一层汇合的？
 
-| 课程阶段 | 最终源码 |
-| --- | --- |
-| 模型聊天和流式输出 | `mock-model.ts`、`agent/loop.ts` |
-| 工具调用 | `tools/registry.ts` 和具体工具文件 |
-| Context Engineering | `context/`、`session/`、`usage/` |
-| Memory + RAG | `memory/`、`rag/` |
-| Skills + Plugins + Channel | `skills/`、`plugins/`、`channels/` |
-| 权限 + Cron + Multi-Agent | `security/`、`cron/`、`agents/` |
-| 配置、CLI、上线 | `config/`、`commands/`、`main.ts` |
-| Trace 加餐 | `trace/` |
+<details>
+<summary>参考思路（点击展开）</summary>
 
-## 0.9 本章自检
+1. `src/index.ts` 只有 6 行，负责区分 `pnpm run init` 和正常启动并**动态 import** 对应文件。这样跑初始化向导时不会提前触发 `main.ts` 顶层的一堆初始化和副作用。
+2. `main.ts` 不写具体的检索、压缩或权限算法，只负责把各模块实例化并互相传递依赖（Composition Root），让子模块保持独立可测。
+3. `ask()` 是外部“人机交互”循环（等用户输入一条）；`agentLoop()` 是单次请求内部的“思考-调工具-观察”循环（可能连跑好几步才把最终文本交还给 `ask()`）。
+4. Memory 启动时会读 `.memory/` 重建索引；Session 虽然写了 `.sessions/default.jsonl`，但 `main.ts` 每次启动都是 `let messages = []`，尚未接入 `SessionStore.load()`；RAG 的 `VectorStore` 纯在内存，没有接持久化向量库。
+5. 在 `agentLoop()` 和 `ToolRegistry` 汇合。`ChannelGateway` 收到外部消息后，也是组装 `system` 后直接调用 `agentLoop(model, registry, messages, system)`。
 
-尝试不看上文回答：
+</details>
 
-1. `index.ts` 和 `main.ts` 的职责有什么不同？
-2. 为什么 `main.ts` 适合作为 Composition Root？
-3. `ask()` 和 `agentLoop()` 分别循环什么？
-4. 为什么 Session、Memory 和 VectorStore 不能视为同一种状态？
-5. 一个飞书消息和一个终端消息最终复用了哪一段核心逻辑？
-
-下一章从最小模型调用开始，进入整个系统最核心的 Agent Loop。
+下一章我们直接拆开最核心的引擎：`agentLoop` 到底是怎么用十来行核心逻辑把模型变成“能干活的 Agent”的。

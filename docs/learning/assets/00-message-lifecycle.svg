@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 600" width="100%" height="auto" role="img" aria-label="一条终端消息的完整生命周期图">
+  <defs>
+    <style>
+      .font { font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    </style>
+    <marker id="arr-bl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#4169E1"/>
+    </marker>
+    <marker id="arr-sl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1.5 L 9 5 L 0 8.5 z" fill="#64748B"/>
+    </marker>
+    <filter id="ds" x="-4%" y="-4%" width="108%" height="114%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#1C3152" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+
+  <rect x="1" y="1" width="1118" height="598" rx="16" fill="#F8FAFF" stroke="#E3E9F2" stroke-width="1.5"/>
+
+  <text x="40" y="42" class="font" font-size="22" font-weight="750" fill="#17243B">一条终端消息的完整生命周期</text>
+  <text x="40" y="66" class="font" font-size="13" fill="#5D6A80">分清外部交互循环 ask() 与单次请求内部的自主执行循环 agentLoop()</text>
+
+  <!-- Outer ask() bracket -->
+  <rect x="28" y="88" width="1064" height="476" rx="14" fill="none" stroke="#CBD5E1" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <rect x="48" y="77" width="290" height="22" rx="11" fill="#F1F5F9" stroke="#CBD5E1"/>
+  <text x="193" y="92" text-anchor="middle" class="font" font-size="11.5" font-weight="700" fill="#475569">外部循环 ask()：等待用户输入 → 处理 → 再等下一句</text>
+
+  <!-- Row 1: Pre-loop Pipeline -->
+  <g filter="url(#ds)">
+    <rect x="52" y="118" width="190" height="72" rx="10" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <text x="147" y="148" text-anchor="middle" class="font" font-size="13.5" font-weight="700" fill="#17243B">1. readline 收到输入</text>
+    <text x="147" y="170" text-anchor="middle" class="mono" font-size="11" fill="#64748B">You: 读取 package.json</text>
+
+    <rect x="282" y="118" width="220" height="72" rx="10" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <text x="392" y="148" text-anchor="middle" class="font" font-size="13.5" font-weight="700" fill="#17243B">2. Command Dispatcher</text>
+    <text x="392" y="170" text-anchor="middle" class="font" font-size="11.5" fill="#64748B">先检查是不是 /context 等命令</text>
+
+    <!-- Branch for slash command -->
+    <rect x="542" y="114" width="208" height="44" rx="8" fill="#FEF3C7" stroke="#FCD34D"/>
+    <text x="646" y="134" text-anchor="middle" class="font" font-size="12" font-weight="700" fill="#92400E">命中命令：不调模型</text>
+    <text x="646" y="150" text-anchor="middle" class="font" font-size="11" fill="#B45309">直接执行后回到 ask()</text>
+
+    <rect x="542" y="174" width="246" height="66" rx="10" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <text x="665" y="201" text-anchor="middle" class="font" font-size="13.5" font-weight="700" fill="#17243B">3. 写入 user 消息</text>
+    <text x="665" y="222" text-anchor="middle" class="font" font-size="11.5" fill="#64748B">推进 messages + 追加 .sessions/</text>
+
+    <rect x="828" y="174" width="240" height="66" rx="10" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <text x="948" y="201" text-anchor="middle" class="font" font-size="13.5" font-weight="700" fill="#17243B">4. 拼 Prompt + 开 Trace</text>
+    <text x="948" y="222" text-anchor="middle" class="font" font-size="11.5" fill="#64748B">PromptBuilder + LocalTraceRecorder</text>
+  </g>
+
+  <line x1="242" y1="154" x2="276" y2="154" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-bl)"/>
+  <path d="M 502 138 L 536 138" fill="none" stroke="#D97706" stroke-width="1.8" marker-end="url(#arr-sl)"/>
+  <path d="M 502 170 L 520 170 L 520 207 L 536 207" fill="none" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-bl)"/>
+  <line x1="788" y1="207" x2="822" y2="207" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-bl)"/>
+
+  <!-- Arrow down into agentLoop -->
+  <path d="M 948 240 L 948 264 L 160 264 L 160 282" fill="none" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-bl)"/>
+
+  <!-- Middle Box: agentLoop() -->
+  <rect x="52" y="288" width="1016" height="164" rx="14" fill="#EFF4FF" stroke="#4169E1" stroke-width="2"/>
+  <rect x="72" y="277" width="322" height="22" rx="11" fill="#4169E1"/>
+  <text x="233" y="292" text-anchor="middle" class="font" font-size="11.5" font-weight="700" fill="#FFFFFF">内部自主循环 agentLoop()：直到模型不再调工具</text>
+
+  <g filter="url(#ds)">
+    <rect x="76" y="314" width="440" height="118" rx="10" fill="#FFFFFF" stroke="#B8C9F8" stroke-width="1.5"/>
+    <text x="96" y="340" class="mono" font-size="13" font-weight="750" fill="#3158C9">Step 1 · 决定并执行工具</text>
+    <text x="96" y="364" class="font" font-size="12.5" fill="#334155">1) 调 streamText()，模型返回 tool-call: read_file("package.json")</text>
+    <text x="96" y="386" class="font" font-size="12.5" fill="#334155">2) AI SDK 触发 ToolRegistry 本地执行并截断返回结果</text>
+    <text x="96" y="408" class="font" font-size="12.5" fill="#334155">3) 将 tool-call + tool-result 写回 messages（hasToolCall = true）</text>
+
+    <rect x="596" y="314" width="448" height="118" rx="10" fill="#FFFFFF" stroke="#B8C9F8" stroke-width="1.5"/>
+    <text x="616" y="340" class="mono" font-size="13" font-weight="750" fill="#0F766E">Step 2 · 观察结果并收尾</text>
+    <text x="616" y="364" class="font" font-size="12.5" fill="#334155">1) 带着最新 messages 再调一次 streamText()</text>
+    <text x="616" y="386" class="font" font-size="12.5" fill="#334155">2) 模型看见文件内容，流式打印最终回答文本</text>
+    <text x="616" y="408" class="font" font-size="12.5" fill="#334155">3) 本步未调用工具（hasToolCall = false）→ 退出循环</text>
+  </g>
+
+  <line x1="516" y1="373" x2="590" y2="373" stroke="#4169E1" stroke-width="2.2" marker-end="url(#arr-bl)"/>
+  <text x="553" y="362" text-anchor="middle" class="font" font-size="11" font-weight="700" fill="#3158C9">下一 Step</text>
+
+  <!-- Arrow down to Post-loop -->
+  <line x1="820" y1="452" x2="820" y2="480" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-bl)"/>
+
+  <!-- Bottom Row: Finish & back to ask() -->
+  <g filter="url(#ds)">
+    <rect x="52" y="486" width="316" height="58" rx="10" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <text x="210" y="511" text-anchor="middle" class="font" font-size="13" font-weight="700" fill="#17243B">6. 回到 ask() 等下一句</text>
+    <text x="210" y="531" text-anchor="middle" class="font" font-size="11.5" fill="#64748B">打印估算 Token 占用并刷新 You: 提示符</text>
+
+    <rect x="412" y="486" width="656" height="58" rx="10" fill="#FFFFFF" stroke="#DCE4F0" stroke-width="1.5"/>
+    <text x="740" y="511" text-anchor="middle" class="font" font-size="13" font-weight="700" fill="#17243B">5. 落盘收尾：Session 追加新增消息 · Trace finish() · Usage 记账</text>
+    <text x="740" y="531" text-anchor="middle" class="mono" font-size="11" fill="#64748B">.sessions/default.jsonl  ·  .traces/default-xxx.jsonl  ·  .usage/today.jsonl</text>
+  </g>
+
+  <line x1="412" y1="515" x2="374" y2="515" stroke="#4169E1" stroke-width="2" marker-end="url(#arr-bl)"/>
+</svg>
