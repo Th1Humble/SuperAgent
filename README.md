@@ -1,70 +1,79 @@
 # SuperAgent
 
-一个用 TypeScript 写的本地 AI Agent 教学项目。代码不到 7,000 行，把 **Agent Loop、工具治理、上下文工程、RAG、长期记忆、安全边界、定时调度与子 Agent** 拆成一眼能看懂的独立模块。
+一个用 TypeScript 写的 **从 0 到 1 学习 AI Agent** 的教学仓库。不依赖黑盒框架，用不到 7,000 行源码完整拆解一个本地 Agent Runtime 是怎么从“调用模型”一步步长成完整系统的。
 
-默认内置 Mock 模型和本地向量占位实现，**不需要申请 API Key，装完依赖就能跑通完整链路**。
-
-> **配套教程**：[在线阅读源码学习手册](https://th1humble.github.io/SuperAgent/learning/) · [仓库 Markdown 版](docs/learning/README.md) · [18 组动手实验](docs/learning/08-hands-on-labs.md)
+配合仓库自带的源码学习手册，你可以边跑代码边吃透每一层设计：
+- 在线阅读：[SuperAgent 源码学习手册](https://th1humble.github.io/SuperAgent/learning/)
+- 仓库内阅读：[docs/learning/README.md](docs/learning/README.md)
 
 ![SuperAgent 整体运行架构](docs/learning/assets/00-architecture.svg)
 
-## 30 秒跑起来（免 API Key）
+## 这个仓库实现了哪些功能
 
-需要 **Node.js 22** 与 **pnpm 10.33.0**（版本不符可先 `corepack enable`）：
+按从 0 到 1 的学习顺序，仓库覆盖了 AI Agent 的核心模块：
+
+- **Agent Loop**：流式对话、`思考 → 调工具 → 观察` 多步闭环、指数退避重试与死循环检测
+- **工具系统**：文件读写、代码搜索、`bash`、网页抓取，支持并发/独占锁、结果截断和 `tool_search` 延迟发现
+- **上下文工程**：`PromptBuilder` 模块化拼接、Prompt Cache 模拟、`/context` 窗口占用可视化与防线清理
+- **RAG 与长期记忆**：文档切片、向量 + BM25 + MMR 混合检索，以及 `.memory/` Markdown 持久化记忆
+- **扩展与多端接入**：`.skills/` 技能加载、进程内插件、MCP 协议客户端、飞书 Bot 与本地通道调试页
+- **安全与自主运行**：三档角色权限、Pre/Post Hook、Bash 危险命令拦截、Cron 定时任务、Sub-Agent 并行分治与执行 Trace
+
+## 怎么启动（默认 Mock 模式，免 API Key）
+
+环境要求 **Node.js 22** 和 **pnpm 10.33.0**：
 
 ```bash
 pnpm install
 pnpm start
 ```
 
-启动后自动进入 Mock 模式，同时在 [http://localhost:3000](http://localhost:3000) 起一个本地 Dashboard 测试页。看到 `You:` 后可以直接试：
+不配置任何 Key 时，项目**默认使用内置的 Mock 模型和本地 Mock 向量**，装完就能直接跑通主链路。看到终端的 `You:` 提示符后可以试试：
 
-- `读取 package.json` —— 触发 `read_file`，观察工具调用如何走两个 Step
-- `测试并发` —— 并行触发多个只读工具，观察并发锁与流式输出
-- `/context` —— 查看 16×16 上下文窗口占用矩阵
-- `/rag` —— 查看启动时自动索引的演示文档（退出输入 `exit`）
+- `读取 package.json` —— 观察模型如何走两个 Step 完成一次工具调用
+- `测试并发` —— 观察多个只读工具如何并行执行
+- `/context`、`/rag` —— 查看上下文占用矩阵和自动导入的演示知识库
+- `exit` —— 退出程序
 
-> 首次安装慢可在 `~/.npmrc` 换镜像源；3000 端口被占可在 `.env` 设置 `FEISHU_PORT=3001`。完整命令与 Mock 触发词见[速查附录](docs/learning/appendix-reference.md)。
+> **启动时看到的 `http://localhost:3000` 是干嘛的？**
+> 它不是网页版聊天窗口，而是 **飞书消息通道的本地模拟调试页**——没配真实飞书机器人时，可以在页面里查看通道状态，或模拟发一条飞书消息来验证“外部消息接入同一套 Agent Loop”的流程（回复会打印在终端里）。平时只在终端里聊，忽略它即可；如果 3000 端口冲突，在 `.env` 里改 `FEISHU_PORT=3001`。
 
-## 接上真实模型
+## 接入真实模型
 
-Mock 模式靠关键词模拟工具调用，不支持 Cron 创建和 Sub-Agent 并行分治。想体验完整能力，接入 DashScope（通义千问）即可：
+### 1. 默认接入的模型（阿里云百炼 DashScope / 通义千问）
+
+初始化向导和 RAG 向量化默认对接 **DashScope**（对话默认 `qwen-plus-latest`，RAG 向量默认 `text-embedding-v3`），只需配一个 `DASHSCOPE_API_KEY` 就能跑通全部功能：
 
 ```bash
 cp -n example.env .env
 pnpm run init
 ```
 
-1. 运行向导时 **API Key 留空直接回车**，生成带 `"${DASHSCOPE_API_KEY}"` 引用的 `super-agent.config.json`（避免密钥落进 JSON，也不会覆盖已有 `.env`）；
-2. 在 `.env` 中填入 `DASHSCOPE_API_KEY`，再 `pnpm start`。
+1. 跑 `pnpm run init` 时，**API Key 这一步直接回车留空**（会在 `super-agent.config.json` 中自动写入 `"${DASHSCOPE_API_KEY}"` 引用）；
+2. 打开 `.env` 填入真实的 `DASHSCOPE_API_KEY=sk-xxx`，再执行 `pnpm start`。
 
-其余可选环境变量（飞书 Bot、Tavily/Serper 搜索等）直接看 [example.env](example.env)。
+> 只填 `.env` 不生成 `super-agent.config.json` 不会生效——程序看的是配置里 `model.apiKey` 替换后是否非空。
 
-## 配套学习手册
+### 2. 如果要换成你自己的模型（任意 OpenAI 兼容接口）
 
-仓库自带 10 章源码导读 + 18 组动手实验（位于 [docs/learning/](docs/learning/README.md)）：
+对话层底层使用 `@ai-sdk/openai`，只要你的模型提供 **OpenAI 兼容接口**（如 DeepSeek、OpenAI、Ollama、OpenRouter 等）都可以直接接入：
 
-- **核心链路（00–02 章）**：整体架构、`agentLoop` 闭环、重试退避、死循环检测、`ToolRegistry` 读写锁与延迟发现
-- **状态与知识（03–04 章）**：`PromptBuilder` 管道、Prompt Cache、三层上下文防线、混合检索（向量 + BM25 + MMR）与 Markdown 长期记忆
-- **扩展与治理（05–07 章）**：Skill / Plugin / MCP / 飞书通道、RBAC 与 Hook、Cron 调度、Sub-Agent、Trace 轨迹排查
-- **实践与边界（08–09 章）**：18 个渐进实验，以及如实列出的 Mock 边界、未接线配置和源码已知缺陷
+1. 仓库默认没有 `super-agent.config.json`（已被 `.gitignore` 忽略）。可以先运行 `pnpm run init` 生成后修改 `model` 字段，或者**直接在项目根目录新建 `super-agent.config.json`**，只写下面这 4 个字段即可（其余配置会自动用默认值）：
+   ```json
+   {
+     "model": {
+       "provider": "openai",
+       "name": "deepseek-chat",
+       "baseURL": "https://api.deepseek.com/v1",
+       "apiKey": "${MY_LLM_API_KEY}"
+     }
+   }
+   ```
+   （`provider` 可选 `"dashscope"` / `"openai"` / `"custom"`，`name` 和 `baseURL` 换成你对应厂商的模型 ID 和接口地址。）
+2. 在 `.env` 中填入对应密钥：`MY_LLM_API_KEY=sk-xxx`。
+3. **注意处理 RAG Embedding**：目前 `src/main.ts` 检测到 `model.apiKey` 非空时，会默认拿这同一个 Key 去调 `src/rag/embedder.ts` 里写死的 DashScope 向量接口。换成其它厂商的 Key 后，启动自动索引 `docs/*.md` 时会报 `401`——把 `src/main.ts` 里的 `embedFn` 改回 `createMockEmbedder()`，或把 `src/rag/embedder.ts` 改成你自己的 Embeddings 接口地址即可。
 
-本地浏览器预览 Docsify 手册（在仓库根目录执行后访问 [http://localhost:8000/docs/learning/](http://localhost:8000/docs/learning/)）：
-
-```bash
-python3 -m http.server 8000
-```
-
-## 开发与注意
-
-```bash
-pnpm exec tsx --test src/context/defense.spec.ts   # 运行单元测试
-pnpm exec tsc --noEmit                             # TypeScript 类型检查
-pnpm run trace:inspect .traces/<轨迹文件>.jsonl     # 查看某轮执行轨迹摘要
-```
-
-- **仅作教学**：Dashboard 无鉴权、文件与 Shell 工具无容器沙箱，**不要把服务暴露到公网**，也不要把涉密文档导入真实 Embedding；
-- `.env`、`super-agent.config.json` 以及 `.traces/` 等运行目录均已在 `.gitignore` 中忽略，分享日志前请先检查敏感内容。
+> 飞书 Bot、网页搜索（Tavily / Serper）等属于可选功能，按需参考 [example.env](example.env) 配置。
 
 ## License
 
